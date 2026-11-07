@@ -36,6 +36,8 @@ const TURN_LIMIT: Duration = Duration::from_secs(15 * 60);
 const MAX_ROUNDS: u32 = 2;
 /// How often an agent's turn may fail on one issue before it goes to the user.
 const MAX_ATTEMPTS: u32 = 3;
+/// How long an agent waits after a failed turn before it runs the same issue again.
+const RETRY_DELAY_SECS: u64 = 5;
 
 /// Milliseconds since the epoch, the clock of the leases.
 fn now() -> i64 { chrono::Utc::now().timestamp_millis() }
@@ -78,6 +80,8 @@ struct Member {
     link_up: bool,
     last_seen: i64,
     status: String,
+    /// Its last turn failed, and it is waiting to run the same issue again or running it again.
+    retrying: bool,
     issue: Option<i64>,
     thread: Option<String>,
     queued: Vec<Queued>,
@@ -209,6 +213,17 @@ impl Ledger {
         held
     }
 
+    /// Counts a failed turn on `issue` and answers the next attempt's number if `owner` may run it
+    /// again: it still holds the claim at `version`, and the issue has failed fewer than
+    /// MAX_ATTEMPTS times.
+    fn failed(&mut self, issue: i64, owner: &str, version: u64) -> Option<u32> {
+        let count = self.attempts.entry(issue).or_default();
+        *count += 1;
+        let count = *count;
+        let held = self.leases.get(&issue).is_some_and(|lease| lease.owner == owner && lease.version == version);
+        (held && count < MAX_ATTEMPTS).then_some(count + 1)
+    }
+
     /// Removes every lease that ran out and returns them, and counts unreachable time.
     fn expired(&mut self, elapsed: i64) -> Vec<(i64, String)> {
         let time = now();
@@ -249,7 +264,7 @@ impl Swarm {
                 } else if !member.link_up { "Link down · waiting to reconnect".into() } else { member.status.clone() };
                 let lived = (state.finished.unwrap_or(time) - member.joined).max(1);
                 json!({ "name": member.name, "role": member.role, "model": member.model, "linkUp": member.link_up,
-                    "reachable": reachable, "lastSeen": member.last_seen, "status": status, "issue": member.issue,
+                    "reachable": reachable, "lastSeen": member.last_seen, "status": status, "retrying": member.retrying, "issue": member.issue,
                     "thread": member.thread, "queued": member.queued.len(), "done": member.done,
                     "uptime": ((lived - member.unreachable_ms.min(lived)) as f64 / lived as f64 * 1000.0).round() / 10.0 })
             }).collect();
@@ -454,7 +469,7 @@ async fn worker(backend: Shared, swarm: Arc<Swarm>, name: String, role: Role, mo
     let actor = swarm.actor(&name);
     loop {
         if swarm.stopped.load(Ordering::SeqCst) {
-            swarm.with(|state| if let Some(member) = state.member(&name) { member.status = "Stopped".into(); member.issue = None; });
+            swarm.with(|state| if let Some(member) = state.member(&name) { member.status = "Stopped".into(); member.issue = None; member.retrying = false; });
             return;
         }
         let up = swarm.with(|state| state.member(&name).is_some_and(|member| member.link_up));
@@ -471,12 +486,39 @@ async fn worker(backend: Shared, swarm: Arc<Swarm>, name: String, role: Role, mo
         });
         let prompt = issue_prompt(&swarm, &name, role, &issue);
         // Short enough for the sidebar: the agent and its issue; the issue's title is on the Board.
-        let outcome = turn(&backend, &swarm, &name, &format!("{name} · #{}", issue.number), &model, &prompt).await;
+        let title = format!("{name} · #{}", issue.number);
+        let mut outcome = turn(&backend, &swarm, &name, &title, &model, &prompt).await;
+        // A failed turn waits a few seconds and runs again, by the same agent on the same issue, while
+        // the agent still holds the claim and the issue has failures left. Its tag says so meanwhile.
+        while let Err(reason) = &outcome {
+            if swarm.stopped.load(Ordering::SeqCst) { break; }
+            let Some(attempt) = swarm.with(|state| state.failed(issue.number, &name, version)) else { break };
+            swarm.with(|state| state.event("warn", format!("{name}'s turn on #{} failed: {}. It retries in {RETRY_DELAY_SECS} s (attempt {attempt} of {MAX_ATTEMPTS}).",
+                issue.number, clip(reason, 160))));
+            for left in (1..=RETRY_DELAY_SECS).rev() {
+                if swarm.stopped.load(Ordering::SeqCst) { break; }
+                swarm.with(|state| {
+                    // Waiting still counts as holding the issue: the heartbeat keeps the lease.
+                    state.beat(&name);
+                    if let Some(member) = state.member(&name) {
+                        member.retrying = true;
+                        member.status = format!("Failed · retrying #{} in {left} s (attempt {attempt} of {MAX_ATTEMPTS})", issue.number);
+                    }
+                });
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            if swarm.stopped.load(Ordering::SeqCst) { break; }
+            swarm.with(|state| if let Some(member) = state.member(&name) {
+                member.status = format!("Retrying #{} {} (attempt {attempt} of {MAX_ATTEMPTS})", issue.number, issue.title);
+            });
+            outcome = turn(&backend, &swarm, &name, &format!("{title} · try {attempt}"), &model, &prompt).await;
+        }
         let (ok, text) = match outcome { Ok(text) => (true, text), Err(reason) => (false, reason) };
         let up = swarm.with(|state| {
             let up = state.member(&name).is_some_and(|member| member.link_up);
             if let Some(member) = state.member(&name) {
                 member.issue = None;
+                member.retrying = false;
                 if !up { member.queued.push(Queued { issue: issue.number, version, ok, text: text.clone() }); }
             }
             if !up { state.event("warn", format!("{name} finished #{} while its link was down. The result is queued until it reconnects.", issue.number)); }
@@ -517,9 +559,10 @@ async fn deliver(backend: &Backend, swarm: &Swarm, name: &str, role: Role, numbe
     let (project, actor) = (swarm.project, swarm.actor(name));
     let store = &backend.agents;
     let summary = clip(text, 4000);
-    // The agent's turn failed: the issue goes back for another try, or to the user after a few.
+    // The agent's turn failed and its own retries ran out (the worker counted each failure): the
+    // issue goes back for another agent, or to the user once it has failed MAX_ATTEMPTS times.
     if !ok {
-        let attempts = swarm.with(|state| { let count = state.attempts.entry(number).or_default(); *count += 1; *count });
+        let attempts = swarm.with(|state| state.attempts.get(&number).copied().unwrap_or(0));
         if attempts >= MAX_ATTEMPTS {
             hand_to_user(backend, swarm, &actor, number, &format!("{name} could not finish #{number} {attempts} times: {}", clip(text, 300))).await;
         } else {
@@ -721,7 +764,7 @@ pub(super) async fn start(State(backend): State<Shared>, input: Body<Start>) -> 
     let lead_model = input.lead_model.clone().unwrap_or_else(|| input.dev.model.clone());
     let time = now();
     let member = |name: String, role: Role, model: String| Member { name, role, model, link_up: true, last_seen: time,
-        status: if role == Role::Lead { "Filing the goal as issues".into() } else { "Waiting for the plan".into() },
+        status: if role == Role::Lead { "Filing the goal as issues".into() } else { "Waiting for the plan".into() }, retrying: false,
         issue: None, thread: None, queued: Vec::new(), done: 0, joined: time, unreachable_ms: 0 };
     let mut team = Vec::new();
     for n in 1..=input.dev.count { team.push((format!("Dev-{n}"), Role::Dev, input.dev.model.clone())); }
@@ -884,7 +927,7 @@ mod tests {
     fn ledger() -> Ledger {
         let time = now();
         let member = |name: &str, role| Member { name: name.into(), role, model: "m".into(), link_up: true, last_seen: time, status: String::new(),
-            issue: None, thread: None, queued: Vec::new(), done: 0, joined: time, unreachable_ms: 0 };
+            retrying: false, issue: None, thread: None, queued: Vec::new(), done: 0, joined: time, unreachable_ms: 0 };
         Ledger { status: "running", members: vec![member("Dev-1", Role::Dev), member("Dev-2", Role::Dev)], events: Vec::new(),
             leases: Default::default(), rounds: Default::default(), attempts: Default::default(), next_version: 0, finished: None }
     }
@@ -925,6 +968,21 @@ mod tests {
         state.member("Dev-1").unwrap().link_up = true;
         state.beat("Dev-1");
         assert!(state.leases[&1].until > now());
+    }
+
+    /// A failed turn is retried by the agent that holds the claim, until the issue has failed
+    /// MAX_ATTEMPTS times; an agent that lost its claim does not retry.
+    #[test]
+    fn a_failed_turn_is_retried_while_the_claim_holds() {
+        let mut state = ledger();
+        let version = state.lease(3, "Dev-1");
+        assert_eq!(state.failed(3, "Dev-1", version), Some(2));
+        assert_eq!(state.failed(3, "Dev-1", version), Some(3));
+        assert_eq!(state.failed(3, "Dev-1", version), None);
+        assert_eq!(state.attempts[&3], MAX_ATTEMPTS);
+        let other = state.lease(4, "Dev-1");
+        state.leases.get_mut(&4).unwrap().owner = "Dev-2".into();
+        assert_eq!(state.failed(4, "Dev-1", other), None);
     }
 
     /// Verdicts are read through Markdown, and the reason is the rest of the first line.

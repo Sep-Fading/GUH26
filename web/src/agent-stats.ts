@@ -38,7 +38,7 @@ export type ActiveTurn = { threadId: string; turnId: string; agent: string; conv
 
 // A running swarm as the running box shows it: its agents, their links and what happened last.
 export type SwarmMember = { name: string; role: 'lead' | 'dev' | 'review' | 'test'; model: string; linkUp: boolean; reachable: boolean;
-  status: string; issue: number | null; thread: string | null; queued: number };
+  status: string; retrying?: boolean; issue: number | null; thread: string | null; queued: number };
 export type LiveSwarm = { id: string; goal: string; status: string; members: SwarmMember[];
   events: { at: number; kind: string; text: string }[]; counts: { done: number; total: number } };
 

@@ -58,8 +58,12 @@ WSL2 for WSL2).
 - **Queued results are checked when the link comes back.** The queue replays, and a result counts
   only if the agent still holds the task at the version it claimed. A late result never overwrites
   finished work or duplicates it.
-- **Failures are retried.** A failed model turn reopens the task; after 3 failures the task is
-  given up.
+- **Failures are retried.** When a model turn fails, the same agent waits 5 s, keeping its lease
+  with heartbeats, and runs the same issue again in a new conversation (`Dev-1 · #2 · try 2`).
+  Meanwhile its tag in the running box turns amber: `Failed · retrying #2 in 3 s (attempt 2 of 3)`,
+  then `Retrying #2 … (attempt 2 of 3)`, and the snapshot's `members[].retrying` is `true`. An
+  agent that lost its claim doesn't retry, and the issue is released for another agent. After 3
+  failed turns on one issue, from any agents, the issue goes to the user.
 - **Failed tests file fixes.** A test reply starting with `FAIL:` files a fix task and a re-test
   after it, up to 2 rounds.
 
