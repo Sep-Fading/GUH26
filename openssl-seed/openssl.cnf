@@ -1,0 +1,23 @@
+# OpenSSL configuration for MiniClaw's private Node inside the Windows sandbox (OPENSSL_CONF).
+# Node reads the nodejs_conf section; other OpenSSL users read openssl_conf, which is absent here.
+# The seed source comes from miniclaw_openssl_seed.dll, found through OPENSSL_MODULES. A relative
+# name is used because OpenSSL treats a backslash in a value as an escape character.
+nodejs_conf = miniclaw_init
+
+[miniclaw_init]
+providers = miniclaw_providers
+random = miniclaw_random
+
+[miniclaw_providers]
+default = miniclaw_default
+miniclawseed = miniclaw_seed
+
+[miniclaw_default]
+activate = 1
+
+[miniclaw_seed]
+module = miniclaw_openssl_seed.dll
+activate = 1
+
+[miniclaw_random]
+seed = MINICLAW-SYSTEM-SEED

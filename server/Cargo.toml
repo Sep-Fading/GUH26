@@ -1,0 +1,43 @@
+[package]
+name = "miniclaw-server"
+version = "0.1.8"
+edition = "2024"
+default-run = "miniclaw-server"
+
+[dependencies]
+base64 = "0.22"
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower-http = { version = "0.6", features = ["fs"] }
+async-stream = "0.3"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+futures-util = { version = "0.3", features = ["sink"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+hmac = "0.13.0"
+sha2 = "0.11.0"
+socket2 = { version = "0.6.5", features = ["all"] }
+libc = "0.2.189"
+
+tower = { version = "0.5.3", features = ["util"] }
+similar = "2"
+toml = "1.1.6"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "stream", "json"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs", "process", "termios"] }
+rustix-openpty = "0.2.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Security_Isolation", "Win32_NetworkManagement_WindowsFilteringPlatform", "Win32_NetworkManagement_WindowsFirewall", "Win32_System_Rpc", "Win32_System_Diagnostics_Etw", "Win32_System_Registry", "Win32_System_Services", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_RemoteDesktop", "Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Storage_FileSystem", "Win32_Storage_Packaging_Appx", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_IO", "Win32_UI_Shell", "Win32_System_Com"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }

@@ -1,0 +1,10 @@
+#!/bin/sh
+# MiniClaw: npx in the sandboxed shell. MiniClaw's Node runs npm's own script with the
+# arguments exactly as given; no batch file and no cmd.exe are involved.
+here=$(dirname "$0")
+cli="$here/node_modules/npm/bin/npx-cli.js"
+if [ ! -r "$cli" ]; then
+  echo "npx is not available in this sandboxed run." >&2
+  exit 127
+fi
+exec "$here/node.exe" --require "$here/npm-sandbox.cjs" "$cli" "$@"

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiniClaw guest browser test</title>
+<style>
+  body { font: 18px system-ui; color: #202124; background: white; margin: 40px; }
+  main { max-width: 420px; margin: auto; }
+  h1 { font-size: 24px; }
+  input, button { font: inherit; padding: 10px; }
+  input { display: block; width: 200px; margin: 10px 0 20px; }
+  canvas { display: block; border: 1px solid #aaa; margin: 20px 0; }
+  output { display: block; margin-top: 24px; font-size: 24px; }
+</style>
+<main>
+  <h1>Guest browser test</h1>
+  <label>Test value<input maxlength="12"></label>
+  <canvas aria-label="Visual target" width="300" height="140"></canvas>
+  <button type="button">Apply</button>
+  <output aria-live="polite">Waiting</output>
+</main>
+<script>
+  const canvas = document.querySelector('canvas');
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#1474db';
+  context.fillRect(150, 40, 60, 60);
+  let selected = false;
+
+  // Accepts only clicks inside the visible blue square.
+  canvas.onclick = event => {
+    selected = event.offsetX >= 150 && event.offsetX <= 210
+      && event.offsetY >= 40 && event.offsetY <= 100;
+    context.strokeStyle = selected ? '#137346' : 'white';
+    context.lineWidth = 4;
+    context.strokeRect(144, 34, 72, 72);
+  };
+
+  // Displays submitted text only after a successful visual target hit.
+  document.querySelector('button').onclick = () => {
+    const value = document.querySelector('input').value;
+    document.querySelector('output').textContent = selected
+      ? `Passed: ${value}` : 'Select the blue square';
+  };
+</script>
+</html>

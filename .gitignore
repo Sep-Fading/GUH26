@@ -1,0 +1,19 @@
+node_modules/
+target/
+web/dist/
+.DS_Store
+.env
+*.env
+.venv/
+__pycache__/
+codex-docs/
+work/
+test-results/
+playwright-report/
+# Release outputs live in GitHub Releases, not in the repository
+*.tar.gz
+*.sha256
+/arm64/
+/x64/
+/releases/
+/outputs/

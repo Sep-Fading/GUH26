@@ -1,0 +1,128 @@
+name: Windows port
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows-port]
+  pull_request:
+    branches: [windows-port]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-10-04
+        with:
+          toolchain: stable
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Stage pinned ConPTY runtime
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = node --input-type=module -e "import { conptyPackage } from './scripts/setup/windows-conpty.mjs'; console.log(JSON.stringify(conptyPackage(process.arch)))" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot select native ConPTY runtime' }
+          $archive = Join-Path $env:RUNNER_TEMP 'miniclaw-conpty.nupkg'
+          Invoke-WebRequest -Uri $package.url -OutFile $archive
+          if ((Get-Item -LiteralPath $archive).Length -ne $package.bytes -or (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $package.digest) {
+            throw 'ConPTY fixture does not match its pinned size and checksum'
+          }
+          $env:MINICLAW_CONPTY_ARCHIVE = $archive
+          "MINICLAW_CONPTY_ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          node --input-type=module -e "import { mkdir, writeFile } from 'node:fs/promises'; import { join } from 'node:path'; import { conptyFiles } from './scripts/setup/windows-conpty.mjs'; const files = await conptyFiles({arch: process.arch}); for (const directory of ['target/debug/conpty', 'target/debug/deps/conpty']) { await mkdir(directory, {recursive: true}); for (const [name, bytes] of files) await writeFile(join(directory, name), bytes); }"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot stage verified ConPTY files' }
+      - name: Stage pinned sandbox shell and source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = node --input-type=module -e "import { windowsShellPackage } from './scripts/setup/windows-shell.mjs'; console.log(JSON.stringify(windowsShellPackage(process.arch)))" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot select native shell runtime' }
+          foreach ($entry in @(@{Pin=$package.binary; Name='MINICLAW_BUSYBOX_BINARY'; File='busybox.exe'}, @{Pin=$package.source; Name='MINICLAW_BUSYBOX_SOURCE'; File='busybox-source.tgz'})) {
+            $file = Join-Path $env:RUNNER_TEMP $entry.File
+            Invoke-WebRequest -Uri $entry.Pin.url -OutFile $file
+            if ((Get-Item -LiteralPath $file).Length -ne $entry.Pin.bytes -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -cne $entry.Pin.digest) { throw 'Shell dependency integrity check failed' }
+            Set-Item -LiteralPath ('Env:' + $entry.Name) -Value $file
+            ($entry.Name + '=' + $file) | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+          node --input-type=module -e "import { mkdir, writeFile } from 'node:fs/promises'; import { join } from 'node:path'; import { shellFiles } from './scripts/setup/windows-shell.mjs'; const files = await shellFiles({arch: process.arch}); for (const directory of ['target/debug/shell', 'target/debug/deps/shell']) { await mkdir(directory, {recursive: true}); for (const [name, bytes] of files) await writeFile(join(directory, name), bytes); }"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot stage verified shell files' }
+      - name: Compile Windows backend
+        run: cargo build --locked --bin miniclaw-server --example provider_fixture
+      - name: Stage pinned Git fixture
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = node --input-type=module -e "import { windowsGitPackage } from './scripts/setup/windows-git.mjs'; console.log(JSON.stringify(windowsGitPackage(process.arch)))" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot select native Git fixture' }
+          $archive = Join-Path $env:RUNNER_TEMP $package.file
+          Invoke-WebRequest -Uri $package.url -OutFile $archive
+          if ((Get-Item -LiteralPath $archive).Length -ne $package.bytes -or (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $package.digest) {
+            throw 'Git fixture does not match its pinned size and checksum'
+          }
+          "MINICLAW_TEST_GIT_ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Installer and PowerShell contracts
+        run: node --test tests/windows-setup.test.mjs tests/setup-windows-network.test.mjs tests/setup-release.test.mjs tests/setup-download.test.mjs tests/setup-bundle-python.test.mjs tests/setup-bundle-dependencies.test.mjs tests/setup-bundle-guide.test.mjs tests/setup-bundle.test.mjs tests/setup-update.test.mjs tests/setup-verify-host.test.mjs tests/setup-windows-git.test.mjs tests/setup-conpty.test.mjs tests/setup-windows-shell.test.mjs tests/setup-destination.test.mjs tests/setup-ci.test.mjs tests/setup-view.test.mjs
+      - name: Type-check and test the page
+        run: |
+          npm run check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:web
+      - name: Chat, delegation and provider acceptance
+        run: node --test tests/harness.test.mjs tests/conversation.test.mjs tests/questions.test.mjs tests/delegation.test.mjs tests/claude.test.mjs tests/providers.test.mjs tests/notifications.test.mjs
+      - name: Windows briefing
+        run: node scripts/test-at-least.mjs 3 --test-concurrency=1 '--test-name-pattern=a plain conversation is told|each message carries the current state|the question tool tells' tests/briefing.test.mjs
+      - name: Timed unrestricted shell approval and expiry
+        run: node scripts/test-at-least.mjs 5 --test-concurrency=1 '--test-name-pattern=unsandboxed|expired approval|main agent can use a timed shell grant' tests/host-tools.test.mjs
+      # The script also runs the ignored recovery tests against the installed broker, as the elevated
+      # runner and as a disposable standard user: sandbox_links_do_not_block_cleanup,
+      # backend_exit_recovers_without_restart, failed_cleanup_retries_without_restart,
+      # large_tree_is_revoked (elevated only), live_member_blocks_absent_job_proof,
+      # internal_hard_links_are_granted, outside_hard_link_is_refused, protected_hard_link_is_refused.
+      # It also runs every ignored test of windows_winsock_acl (the Winsock catalog entry manager on a
+      # synthetic key tree, and the installed service's real keys) and of windows_network (offline and
+      # networked runs through the service; the standard user runs three of them). windows_tools
+      # (real Git, Node and Python over HTTPS) is not run here: it needs the bundled Git archive and
+      # public internet, and its Git case fails until the bundled OpenSSL seeds from BCryptGenRandom.
+      - name: Native Windows acceptance
+        run: |
+          & ./scripts/windows-native-acceptance.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package Windows release
+        run: |
+          cargo fetch --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/package-backend.mjs windows-package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/package-release.mjs windows-portable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install relocated package and verify restart and update
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $portable = Join-Path $env:RUNNER_TEMP 'relocated MiniClaw portable'
+          if (Test-Path -LiteralPath $portable) { throw 'Acceptance relocation already exists' }
+          Copy-Item -LiteralPath windows-portable -Destination $portable -Recurse
+          & (Join-Path $portable 'miniclaw.cmd') --help
+          if ($LASTEXITCODE -ne 0) { throw 'Relocated launcher failed' }
+          $node = Join-Path $portable 'node/bin/node.exe'
+          & $node -e "if(process.platform!=='win32'||process.arch!=='x64'||process.version!=='v24.21.0')process.exit(1)"
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled Node identity failed' }
+          $env:MINICLAW_HOST_PACKAGE = Join-Path $portable 'prebuilt/bundle'
+          $env:MINICLAW_PORTABLE_PACKAGE = $portable
+          & $node --test --test-concurrency=1 tests/host-install-smoke.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Installed host restart/update acceptance failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: miniclaw-windows-x64-experimental
+          path: |
+            windows-package/
+            windows-portable/
+          if-no-files-found: error

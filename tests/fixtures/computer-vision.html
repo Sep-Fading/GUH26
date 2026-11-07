@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiniClaw vision check</title>
+<style>
+  body { margin: 0; background: #edf1f3; color: #202428; font: 18px system-ui; }
+  main { width: min(480px, 100%); margin: 32px auto; }
+  h1 { font-size: 22px; padding: 0 16px; }
+  canvas { width: 100%; height: auto; display: block; background: white; }
+  output { display: block; padding: 16px; }
+</style>
+<main>
+  <h1>MiniClaw vision check</h1>
+  <canvas width="480" height="360" aria-label="Visual test target"></canvas>
+  <output aria-live="polite">Waiting for a click</output>
+</main>
+<script>
+  const canvas = document.querySelector('canvas');
+  const ctx = canvas.getContext('2d');
+  const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+  const positions = [80, 200, 320];
+  const square = positions[seed % positions.length];
+  const others = positions.filter(x => x !== square);
+  ctx.fillStyle = '#202428';
+  ctx.font = '22px system-ui';
+  ctx.fillText('Click the green square', 28, 55);
+  ctx.fillStyle = '#148346';
+  ctx.fillRect(square, 150, 72, 72);
+  ctx.fillStyle = '#dc394d';
+  ctx.beginPath();
+  ctx.arc(others[0] + 36, 186, 36, 0, 2 * Math.PI);
+  ctx.fill();
+  ctx.fillStyle = '#2861bd';
+  ctx.beginPath();
+  ctx.moveTo(others[1], 222);
+  ctx.lineTo(others[1] + 36, 150);
+  ctx.lineTo(others[1] + 72, 222);
+  ctx.closePath();
+  ctx.fill();
+  canvas.addEventListener('click', event => {
+    const rect = canvas.getBoundingClientRect();
+    const x = (event.clientX - rect.left) * canvas.width / rect.width;
+    const y = (event.clientY - rect.top) * canvas.height / rect.height;
+    const passed = x >= square && x <= square + 72 && y >= 150 && y <= 222;
+    document.querySelector('output').textContent = passed
+      ? 'Passed: green square selected' : 'Missed: try again';
+  });
+</script>
+</html>

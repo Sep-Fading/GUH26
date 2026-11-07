@@ -1,0 +1,426 @@
+/* Supplies utility classes and base styles. */
+@import "tailwindcss";
+/* Open and close animations used by shadcn-svelte components. */
+@import "tw-animate-css";
+@import "shadcn-svelte/tailwind.css";
+
+/* shadcn-svelte components switch on a .dark class; main.ts keeps it in step with macOS. */
+@custom-variant dark (&:is(.dark *));
+
+/* Keep row actions visible to touch and keyboard users. */
+@media (hover: hover) and (min-width: 768px) {
+  .nav-actions { opacity: 0; }
+  .group:hover > .nav-actions,
+  .group:focus-within > .nav-actions { opacity: 1; }
+}
+
+/* The shadcn-svelte variable contract, filled with a macOS-like palette: neutral greys,
+   one blue brand colour, semantic green and red. Hex values keep computed styles in rgb. */
+:root {
+  --radius: 0.75rem;
+  --background: #ffffff;
+  --foreground: #1d1d1f;
+  --card: #ffffff;
+  --card-foreground: #1d1d1f;
+  --popover: #ffffff;
+  --popover-foreground: #1d1d1f;
+  --primary: #1d1d1f;
+  --primary-foreground: #ffffff;
+  --secondary: #f0f0f3;
+  --secondary-foreground: #1d1d1f;
+  --muted: #f5f5f7;
+  --muted-foreground: #6e6e73;
+  --accent: #ececf0;
+  --accent-foreground: #1d1d1f;
+  --destructive: #c9252d;
+  --border: #e3e3e8;
+  --input: #d9d9de;
+  --ring: #0071e3;
+  --sidebar: #f5f5f7;
+  --sidebar-foreground: #1d1d1f;
+  --sidebar-primary: #0071e3;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e8e8ed;
+  --sidebar-accent-foreground: #1d1d1f;
+  --sidebar-border: #e3e3e8;
+  --sidebar-ring: #0071e3;
+  /* MiniClaw's own additions to the contract. */
+  /* Chart series. The first is the accent itself; the rest are quiet steps beside it. */
+  --chart-1: var(--brand);
+  --chart-2: #5a7f9e;
+  --chart-3: #8a8a93;
+  --chart-4: #b4b4bd;
+  --chart-5: #248a3d;
+  --brand: #0071e3;
+  --brand-foreground: #ffffff;
+  --success: #248a3d;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: #141416;
+  --foreground: #f5f5f7;
+  --card: #1c1c1e;
+  --card-foreground: #f5f5f7;
+  --popover: #232326;
+  --popover-foreground: #f5f5f7;
+  --primary: #f5f5f7;
+  --primary-foreground: #1d1d1f;
+  --secondary: #2a2a2d;
+  --secondary-foreground: #f5f5f7;
+  --muted: #1c1c1e;
+  --muted-foreground: #a1a1a6;
+  --accent: #2c2c30;
+  --accent-foreground: #f5f5f7;
+  --destructive: #ff6961;
+  --border: #333336;
+  --input: #3a3a3e;
+  --ring: #2997ff;
+  --sidebar: #1c1c1e;
+  --sidebar-foreground: #f5f5f7;
+  --sidebar-primary: #2997ff;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #2c2c30;
+  --sidebar-accent-foreground: #f5f5f7;
+  --sidebar-border: #333336;
+  --sidebar-ring: #2997ff;
+  --chart-1: var(--brand);
+  --chart-2: #6f97b8;
+  --chart-3: #9a9aa2;
+  --chart-4: #55555c;
+  --chart-5: #30d158;
+  --brand: #0a6fe0;
+  --brand-foreground: #ffffff;
+  --success: #30d158;
+}
+
+/* Appearance choices arrive as attributes on the root (web/src/appearance.svelte.ts). Each
+   accent has a light and a dark value with enough contrast under white text. */
+:root[data-accent="green"] { --brand: #1d7a35; --ring: #1d7a35; --sidebar-primary: #1d7a35; --sidebar-ring: #1d7a35; }
+:root[data-accent="purple"] { --brand: #7d3fc4; --ring: #7d3fc4; --sidebar-primary: #7d3fc4; --sidebar-ring: #7d3fc4; }
+:root[data-accent="orange"] { --brand: #b85400; --ring: #b85400; --sidebar-primary: #b85400; --sidebar-ring: #b85400; }
+:root[data-accent="pink"] { --brand: #c2255c; --ring: #c2255c; --sidebar-primary: #c2255c; --sidebar-ring: #c2255c; }
+:root[data-accent="graphite"] { --brand: #55555a; --ring: #6e6e73; --sidebar-primary: #55555a; --sidebar-ring: #6e6e73; }
+/* White: whatever sits on the accent turns dark, and the accent used as text or as an icon
+   follows the page's own text colour, so nothing is ever white on white. White surfaces get an
+   outline, because on a light page they would otherwise vanish. */
+:root[data-accent="white"] { --brand: #ffffff; --brand-foreground: #1d1d1f; --ring: #8e8e93; --sidebar-primary: #ffffff;
+  --sidebar-primary-foreground: #1d1d1f; --sidebar-ring: #8e8e93; }
+:root[data-accent="white"] .text-brand { color: var(--foreground); }
+:root[data-accent="white"] :is(.bg-brand, .bubble-user, .send-button:not(:disabled), .workspace-count, .workspace-dot) {
+  box-shadow: inset 0 0 0 1px var(--border); }
+:root[data-accent="white"] .markdown a { color: var(--foreground); }
+.dark[data-accent="green"] { --brand: #1f8f3c; --ring: #30d158; }
+.dark[data-accent="purple"] { --brand: #8a4fd6; --ring: #bf5af2; }
+.dark[data-accent="orange"] { --brand: #c25a00; --ring: #ff9f0a; }
+.dark[data-accent="pink"] { --brand: #cc2f67; --ring: #ff375f; }
+.dark[data-accent="graphite"] { --brand: #6c6c70; --ring: #98989d; }
+
+/* Everything is sized in rem, so one root size scales messages, composer and controls. */
+:root[data-text="small"] { font-size: 14.5px; }
+:root[data-text="large"] { font-size: 17.5px; }
+
+@theme inline {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", sans-serif;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-success: var(--success);
+  --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply m-0 bg-background font-sans text-foreground antialiased;
+    /* SF text is set slightly tight at body sizes. */
+    letter-spacing: -0.011em;
+  }
+
+  h1, h2 { letter-spacing: -0.022em; }
+
+  button, textarea {
+    font: inherit;
+  }
+
+  /* Native checkboxes, radios and selects stay native and take the theme's colours. */
+  input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
+
+  button:enabled { cursor: pointer; }
+  button:disabled, textarea:disabled { cursor: not-allowed; }
+
+  :focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--ring) 45%, transparent);
+    outline-offset: 2px;
+  }
+
+  /* A sheet dims and softens what is behind it. */
+  [data-dialog-overlay] {
+    backdrop-filter: blur(10px) saturate(140%);
+    -webkit-backdrop-filter: blur(10px) saturate(140%);
+  }
+}
+
+@layer components {
+  .shell {
+    @apply grid h-dvh min-h-96 grid-cols-1;
+    @media (min-width: 768px) {
+      grid-template-columns: clamp(200px, var(--navigation-width, var(--navigation-default, 240px)),
+        min(560px, max(200px, calc(100vw - 420px)))) minmax(0, 1fr);
+    }
+  }
+
+  .icon-button {
+    @apply flex size-9 shrink-0 items-center justify-center rounded-md transition-colors;
+    @apply text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40;
+  }
+
+  .new-chat {
+    @apply flex h-10 w-full items-center gap-3 rounded-md border shadow-xs transition-colors;
+    @apply border-border bg-background px-3 text-sm font-medium text-foreground hover:bg-accent;
+  }
+
+  .computer-toggle[aria-pressed="true"] {
+    @apply bg-brand/12 text-brand;
+  }
+
+  /* Messages fade out above the composer instead of being cut by its edge. */
+  .conversation-scroll {
+    /* The scrollbar's width is kept free on both sides, or it would push the text left. The
+       left padding keeps the text clear of the timeline rail on narrow windows. */
+    scrollbar-gutter: stable both-edges;
+    padding-left: max(1rem, 44px);
+    padding-right: max(1rem, 44px);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  }
+
+  /* The composer floats over the page and lights up in the brand colour on focus. */
+  .composer {
+    @apply rounded-2xl border border-border bg-background p-3;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 10px 30px -12px rgb(0 0 0 / 0.14);
+    transition: border-color 150ms var(--ease-out-soft), box-shadow 150ms var(--ease-out-soft);
+  }
+  .composer:focus-within {
+    border-color: color-mix(in srgb, var(--brand) 55%, var(--border));
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 14%, transparent),
+      0 10px 30px -12px rgb(0 0 0 / 0.14);
+  }
+  .composer textarea:focus-visible { outline: none; }
+
+  /* Grow with text, then scroll beyond four visible lines. */
+  .composer-input {
+    @apply block w-full resize-none overflow-y-auto bg-transparent p-0 text-base leading-6;
+    field-sizing: content;
+    min-height: 1lh;
+    max-height: 4lh;
+  }
+
+  /* The user's words are the one loud element on the page. */
+  .bubble-user {
+    @apply ml-auto w-fit max-w-[92%] rounded-2xl bg-brand px-4 py-2.5 text-brand-foreground sm:max-w-[85%];
+  }
+
+  .send-button {
+    @apply flex size-9 shrink-0 items-center justify-center rounded-full transition;
+    @apply bg-brand text-brand-foreground disabled:bg-accent disabled:text-muted-foreground;
+  }
+  .send-button:enabled:hover { filter: brightness(1.08); }
+  .send-button:enabled:active { transform: scale(0.96); }
+
+  .tooltip {
+    @apply z-50 rounded-md bg-primary/90 px-2.5 py-1.5 text-xs font-medium text-primary-foreground shadow-lg;
+    backdrop-filter: blur(12px);
+  }
+
+  .agent-field {
+    @apply block w-full rounded-md border border-input bg-background px-3 py-2 text-sm;
+    transition: border-color 150ms var(--ease-out-soft), box-shadow 150ms var(--ease-out-soft);
+  }
+  .agent-field:focus-visible {
+    outline: none;
+    border-color: var(--ring);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 22%, transparent);
+  }
+}
+
+/* Compact layout: tighter rows and gaps for small windows. */
+:root[data-compact] .conversation-scroll { padding-block: 1rem; }
+:root[data-compact] .conversation-scroll .space-y-8 > * + * { margin-top: 1rem; }
+:root[data-compact] .composer { padding: 0.5rem 0.75rem; }
+:root[data-compact] .shell { --navigation-default: 208px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}
+
+/* Rendered assistant replies. Spacing follows the message's own line height. */
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p, .markdown ul, .markdown ol, .markdown blockquote, .markdown table, .markdown .md-code { margin: 0.75em 0; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 { margin: 1.25em 0 0.5em; font-weight: 600; line-height: 1.3; }
+.markdown h1 { font-size: 1.375em; }
+.markdown h2 { font-size: 1.2em; }
+.markdown h3, .markdown h4 { font-size: 1.05em; }
+.markdown ul { list-style: disc; padding-left: 1.4em; }
+.markdown ol { list-style: decimal; padding-left: 1.4em; }
+.markdown li { margin: 0.2em 0; }
+.markdown blockquote { border-left: 3px solid var(--border); padding-left: 0.9em; color: var(--muted-foreground); }
+.markdown a { color: var(--brand); text-decoration: underline; text-underline-offset: 2px; }
+.markdown hr { border: 0; border-top: 1px solid var(--border); margin: 1.25em 0; }
+.markdown :not(pre) > code { border-radius: 0.3em; background: var(--muted); padding: 0.1em 0.35em; font-size: 0.875em; }
+.markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 0.9em; }
+.markdown th, .markdown td { border: 1px solid var(--border); padding: 0.35em 0.7em; text-align: left; }
+.markdown th { background: var(--muted); font-weight: 600; }
+.markdown .md-code { overflow: hidden; border: 1px solid var(--border); border-radius: 0.6rem; background: var(--muted); }
+.markdown .md-code-bar { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border);
+  padding: 0.25rem 0.6rem; font-size: 0.75rem; color: var(--muted-foreground); }
+.markdown .md-code-bar button { border-radius: 0.35rem; padding: 0.1rem 0.45rem; }
+.markdown .md-code-bar button:hover { background: var(--background); color: var(--foreground); }
+.markdown pre { margin: 0; overflow-x: auto; padding: 0.75rem 0.9rem; font-size: 0.8125rem; line-height: 1.55; white-space: pre; }
+.markdown pre.md-plain { white-space: pre-wrap; }
+.markdown .md-image { border: 1px dashed var(--border); border-radius: 0.5rem; padding: 0.4rem 0.75rem; font-size: 0.8125rem;
+  color: var(--muted-foreground); }
+.markdown .md-image:hover { color: var(--foreground); background: var(--muted); }
+.markdown .md-mcp-card { margin: 0.75rem 0; border: 1px solid var(--border); border-radius: 0.75rem; background: var(--muted);
+  padding: 0.85rem 1rem; font-size: 0.8125rem; }
+.markdown .md-mcp-title { margin: 0 0 0.5rem; font-size: 0.875rem; }
+.markdown .md-mcp-card dl { margin: 0; display: grid; gap: 0.3rem; }
+.markdown .md-mcp-row { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: 0.5rem; }
+.markdown .md-mcp-row dt { color: var(--muted-foreground); }
+.markdown .md-mcp-row dd { margin: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.75rem; overflow-wrap: anywhere; }
+.markdown .md-mcp-note { margin: 0.6rem 0; font-size: 0.75rem; color: var(--muted-foreground); }
+.markdown .md-mcp-card button { border-radius: 0.5rem; background: var(--brand); color: var(--brand-foreground); padding: 0.4rem 0.8rem;
+  font-size: 0.8125rem; font-weight: 500; }
+.markdown .md-mcp-card button:hover { opacity: 0.9; }
+.markdown .md-mcp-card button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.markdown .md-loaded-image { max-width: 100%; height: auto; border-radius: 0.5rem; }
+/* Code colours that read on both themes. */
+.hljs-comment, .hljs-quote { color: var(--muted-foreground); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-built_in { color: #a626a4; }
+.hljs-string, .hljs-attr, .hljs-addition { color: #2f8a3c; }
+.hljs-number, .hljs-symbol, .hljs-meta { color: #b76b01; }
+.hljs-title, .hljs-section, .hljs-name, .hljs-type { color: #2f5fd0; }
+.hljs-deletion { color: #c4352b; }
+:root.dark .hljs-keyword, :root.dark .hljs-selector-tag, :root.dark .hljs-literal, :root.dark .hljs-built_in { color: #d19af0; }
+:root.dark .hljs-string, :root.dark .hljs-attr, :root.dark .hljs-addition { color: #8fd694; }
+:root.dark .hljs-number, :root.dark .hljs-symbol, :root.dark .hljs-meta { color: #e5b567; }
+:root.dark .hljs-title, :root.dark .hljs-section, :root.dark .hljs-name, :root.dark .hljs-type { color: #82aaff; }
+:root.dark .hljs-deletion { color: #ff8a80; }
+
+/* Unified diffs in the activity list: whole-line colour, as in a code review. */
+.diff > span { display: block; padding: 0 0.6rem; white-space: pre; }
+.diff-added { background: color-mix(in srgb, var(--success) 16%, transparent); }
+.diff-removed { background: color-mix(in srgb, var(--destructive) 14%, transparent); }
+.diff-hunk { color: var(--brand); background: color-mix(in srgb, var(--brand) 8%, transparent); }
+.diff-note, .diff-context { color: var(--muted-foreground); }
+
+/* Code review. The colours are GitHub's diff colours, which the user asked for by name: a pale
+   wash on the whole line, a stronger tone on the line number and on the characters that changed. */
+:root {
+  --diff-add: #e6ffec; --diff-add-strong: #abf2bc; --diff-add-number: #ccffd8;
+  --diff-del: #ffebe9; --diff-del-strong: #ffc1bc; --diff-del-number: #ffd7d5;
+  --diff-hunk: #ddf4ff; --diff-hunk-text: #57606a; --diff-gap: #f6f8fa;
+}
+:root.dark {
+  --diff-add: #12261e; --diff-add-strong: #1d572d; --diff-add-number: #173a24;
+  --diff-del: #25171c; --diff-del-strong: #792e2d; --diff-del-number: #3c1c1f;
+  --diff-hunk: #121d2f; --diff-hunk-text: #8b949e; --diff-gap: #161b22;
+}
+.diffview { display: flex; min-height: 0; flex-direction: column; font-size: 12.5px; }
+.diffview-bar { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--border); background: var(--background); }
+.diffview-count { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; }
+.diffview-count .plus { color: #1a7f37; } .diffview-count .minus { color: #cf222e; }
+:root.dark .diffview-count .plus { color: #3fb950; } :root.dark .diffview-count .minus { color: #f85149; }
+.diffview-switch { display: flex; border: 1px solid var(--border); border-radius: 0.45rem; overflow: hidden; }
+.diffview-switch button { display: flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.55rem; font-size: 0.75rem; color: var(--muted-foreground); }
+.diffview-switch button[aria-pressed="true"] { background: var(--muted); color: var(--foreground); }
+.diffview-empty { padding: 1.5rem; color: var(--muted-foreground); font-size: 0.8125rem; }
+.diffview-table { width: 100%; border-collapse: collapse; font-family: ui-monospace, "SF Mono", Menlo, monospace; line-height: 20px; tab-size: 4; }
+.diffview-table.split { table-layout: fixed; }
+.diffview-table.split col.narrow { width: 4em; }
+.diffview-table.split .number { width: auto; min-width: 0; }
+.diffview-table td { padding: 0; vertical-align: top; }
+.diffview-table .number { width: 1%; min-width: 3.2em; padding: 0 0.6em; text-align: right; color: var(--muted-foreground);
+  user-select: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.diffview-table .code { padding-right: 1em; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diffview-table .sign { display: inline-block; width: 1.6em; text-align: center; user-select: none; color: var(--muted-foreground); }
+.diffview-table .added { background: var(--diff-add); } .diffview-table .number.added { background: var(--diff-add-number); }
+.diffview-table .removed { background: var(--diff-del); } .diffview-table .number.removed { background: var(--diff-del-number); }
+.diffview-table .gap { background: var(--diff-gap); }
+.diffview-table .added mark { background: var(--diff-add-strong); color: inherit; border-radius: 2px; }
+.diffview-table .removed mark { background: var(--diff-del-strong); color: inherit; border-radius: 2px; }
+.diffview-table tr.hunk td { position: sticky; top: 0; z-index: 1; padding: 0.15rem 0.75rem; background: var(--diff-hunk); color: var(--diff-hunk-text); }
+.diffview-table tr.note td { padding: 0.1rem 0.75rem 0.1rem 8.5em; color: var(--muted-foreground); font-style: italic; }
+
+/* The right-hand workspace panel. */
+.workspace { position: relative; min-height: 0; }
+.workspace-handle { position: absolute; inset: 0 auto 0 -3px; width: 6px; cursor: col-resize; z-index: 5; }
+.workspace-handle:hover, .workspace-handle:focus-visible { background: color-mix(in srgb, var(--brand) 45%, transparent); outline: none; }
+.workspace-tab { display: flex; align-items: center; gap: 0.35rem; border-radius: 0.45rem; padding: 0.3rem 0.6rem; font-size: 0.8125rem; color: var(--muted-foreground); white-space: nowrap; }
+.workspace-tab:hover { color: var(--foreground); }
+.workspace-tab[aria-selected="true"] { background: var(--muted); color: var(--foreground); font-weight: 500; }
+.workspace-count { min-width: 1.15rem; border-radius: 999px; background: var(--brand); padding: 0 0.3rem; font-size: 0.6875rem; line-height: 1.15rem; text-align: center; color: var(--brand-foreground); }
+.workspace-dot { position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 999px; background: var(--brand); }
+.workspace-open { display: flex; align-items: center; gap: 0.35rem; margin: 0.4rem 0.75rem 0 auto; border: 1px solid var(--border);
+  border-radius: 999px; background: var(--background); padding: 0.25rem 0.7rem; font-size: 0.75rem; color: var(--muted-foreground); }
+.files-row, .changes-row { display: flex; width: 100%; min-width: 0; align-items: center; gap: 0.4rem; padding: 0.28rem 0.6rem; text-align: left; }
+.files-row:hover, .changes-row:hover { background: var(--muted); }
+.files-current { background: var(--muted); font-weight: 500; }
+.changes-row { padding: 0.5rem 0.6rem; gap: 0.5rem; }
+.changes-plus { color: #1a7f37; } .changes-minus { color: #cf222e; }
+:root.dark .changes-plus { color: #3fb950; } :root.dark .changes-minus { color: #f85149; }
+.changes-status { flex-shrink: 0; border-radius: 0.3rem; padding: 0 0.35rem; font-size: 0.6875rem; line-height: 1.1rem; }
+.changes-status.new { background: var(--diff-add); color: #1a7f37; } .changes-status.deleted { background: var(--diff-del); color: #cf222e; }
+.fileview { width: 100%; border-collapse: collapse; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 20px; tab-size: 4; }
+.fileview .number { width: 1%; min-width: 3em; padding: 0 0.7em; text-align: right; color: var(--muted-foreground); user-select: none; vertical-align: top; }
+.fileview .code { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 1em; }
+
+/* In the dark theme the accent is too dim to read as text (3.8:1 for blue, found by axe). Text
+   and icons use the accent's brighter ring tone there; surfaces keep the deeper tone, which
+   carries white text well. */
+.dark .text-brand, .dark .markdown a { color: var(--ring); }
+
+/* People who ask their system for less motion get none of the fades and slides. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0s !important; scroll-behavior: auto !important; }
+}

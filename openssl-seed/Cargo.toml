@@ -1,0 +1,20 @@
+# An OpenSSL 3 provider that seeds OpenSSL from BCryptGenRandom. MiniClaw's private Node loads it
+# inside the Windows sandbox, where the CryptoAPI seed of the official Node build is denied.
+[package]
+name = "miniclaw-openssl-seed"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+
+# Its own workspace: it is built separately for each Windows architecture and has no dependencies.
+[workspace]
