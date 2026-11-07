@@ -719,7 +719,7 @@ pub async fn resume_all(backend: Shared) {
         let time = now();
         let members: Vec<Member> = record["members"].as_array().into_iter().flatten().filter_map(|member| Some(Member {
             name: member["name"].as_str()?.to_owned(), role: serde_json::from_value(member["role"].clone()).ok()?,
-            model: member["model"].as_str()?.to_owned(), link_up: true, last_seen: time, status: "Resuming".into(), issue: None,
+            model: member["model"].as_str()?.to_owned(), link_up: true, last_seen: time, status: "Resuming".into(), retrying: false, issue: None,
             thread: member["thread"].as_str().map(str::to_owned), queued: Vec::new(), done: member["done"].as_u64().unwrap_or(0) as u32,
             joined: time, unreachable_ms: 0, reconnect_at: None })).collect();
         let Some(lead) = members.iter().find(|member| member.role == Role::Lead).cloned() else { continue };
@@ -835,7 +835,7 @@ pub(super) async fn start(State(backend): State<Shared>, input: Body<Start>) -> 
     let skills = role_skills(&backend).await;
     let lead_model = input.lead_model.clone().unwrap_or_else(|| input.dev.model.clone());
     let time = now();
-    let member = |name: String, role: Role, model: String| Member { name, role, model, link_up: true, last_seen: time,
+    let member = |name: String, role: Role, model: String| Member { name, role, model, link_up: true, last_seen: time, retrying: false,
         status: if role == Role::Lead { "Filing the goal as issues".into() } else { "Waiting for the plan".into() },
         issue: None, thread: None, queued: Vec::new(), done: 0, joined: time, unreachable_ms: 0, reconnect_at: None };
    let mut team = Vec::new();
@@ -1030,11 +1030,7 @@ mod tests {
     fn ledger() -> Ledger {
         let time = now();
         let member = |name: &str, role| Member { name: name.into(), role, model: "m".into(), link_up: true, last_seen: time, status: String::new(),
-<<<<<<< HEAD
-            issue: None, thread: None, queued: Vec::new(), done: 0, joined: time, unreachable_ms: 0, reconnect_at: None };
-=======
-            retrying: false, issue: None, thread: None, queued: Vec::new(), done: 0, joined: time, unreachable_ms: 0 };
->>>>>>> fa3be5121548b0cb539466b87d4aa7702287edf2
+            retrying: false, issue: None, thread: None, queued: Vec::new(), done: 0, joined: time, unreachable_ms: 0, reconnect_at: None };
         Ledger { status: "running", members: vec![member("Dev-1", Role::Dev), member("Dev-2", Role::Dev)], events: Vec::new(),
             leases: Default::default(), rounds: Default::default(), attempts: Default::default(), next_version: 0, finished: None }
     }
