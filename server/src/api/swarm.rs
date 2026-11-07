@@ -84,6 +84,8 @@ struct Member {
     done: u32,
     joined: i64,
     unreachable_ms: i64,
+    /// When MiniClaw will try to reconnect this agent's cut link by itself.
+    reconnect_at: Option<i64>,
 }
 
 /// One line of the swarm's history.
@@ -247,6 +249,10 @@ impl Swarm {
                 } else if !member.link_up && !member.queued.is_empty() {
                     format!("Link down · {} result{} queued", member.queued.len(), if member.queued.len() == 1 { "" } else { "s" })
                 } else if !member.link_up { "Link down · waiting to reconnect".into() } else { member.status.clone() };
+                let status = match member.reconnect_at.filter(|_| !member.link_up) {
+                    Some(at) => format!("{status} · reconnecting in {} s", ((at - time).max(0) + 999) / 1000),
+                    None => status,
+                };
                 let lived = (state.finished.unwrap_or(time) - member.joined).max(1);
                 json!({ "name": member.name, "role": member.role, "model": member.model, "linkUp": member.link_up,
                     "reachable": reachable, "lastSeen": member.last_seen, "status": status, "issue": member.issue,
@@ -672,7 +678,7 @@ pub async fn resume_all(backend: Shared) {
             name: member["name"].as_str()?.to_owned(), role: serde_json::from_value(member["role"].clone()).ok()?,
             model: member["model"].as_str()?.to_owned(), link_up: true, last_seen: time, status: "Resuming".into(), issue: None,
             thread: member["thread"].as_str().map(str::to_owned), queued: Vec::new(), done: member["done"].as_u64().unwrap_or(0) as u32,
-            joined: time, unreachable_ms: 0 })).collect();
+            joined: time, unreachable_ms: 0, reconnect_at: None })).collect();
         let Some(lead) = members.iter().find(|member| member.role == Role::Lead).cloned() else { continue };
         let team: Vec<(String, Role, String)> = members.iter().filter(|member| member.role != Role::Lead)
             .map(|member| (member.name.clone(), member.role, member.model.clone())).collect();
@@ -788,7 +794,7 @@ pub(super) async fn start(State(backend): State<Shared>, input: Body<Start>) -> 
     let time = now();
     let member = |name: String, role: Role, model: String| Member { name, role, model, link_up: true, last_seen: time,
         status: if role == Role::Lead { "Filing the goal as issues".into() } else { "Waiting for the plan".into() },
-        issue: None, thread: None, queued: Vec::new(), done: 0, joined: time, unreachable_ms: 0 };
+        issue: None, thread: None, queued: Vec::new(), done: 0, joined: time, unreachable_ms: 0, reconnect_at: None };
     let mut team = Vec::new();
     for n in 1..=input.dev.count { team.push((format!("Dev-{n}"), Role::Dev, input.dev.model.clone())); }
     if let Some(review) = review {
@@ -843,32 +849,63 @@ pub(super) async fn view(State(backend): State<Shared>, Path(id): Path<String>) 
     saved().into_iter().find(|snapshot| snapshot["id"] == id.as_str()).map(Json).ok_or_else(missing)
 }
 
-/// Cuts or restores one agent's link to the issues.
+/// Cuts or restores one agent's link to the issues. A cut link is retried by MiniClaw after
+/// `reconnectSeconds` (45 if not given; 0 leaves it cut until someone restores it).
 #[derive(Deserialize)]
-pub(super) struct Link { agent: String, up: bool }
+#[serde(rename_all = "camelCase")]
+pub(super) struct Link { agent: String, up: bool, #[serde(default)] reconnect_seconds: Option<u64> }
 
-/// Cuts or restores an agent's link; a restored agent replays what it queued.
+/// How long a cut link waits before MiniClaw tries to reconnect it.
+const RECONNECT_SECONDS: u64 = 45;
+
+/// Changes one agent's link. Returns what the agent queued while it was cut (to deliver now) and
+/// when the next automatic reconnect is due, or `None` if there is no such agent.
+fn apply_link(swarm: &Swarm, agent: &str, up: bool, after: u64, automatic: bool) -> Option<(Vec<(Role, Queued)>, Option<i64>)> {
+    swarm.with(|state| {
+        let member = state.member(agent).filter(|member| member.role != Role::Lead)?;
+        if member.link_up == up { return Some((Vec::new(), None)); }
+        member.link_up = up;
+        let role = member.role;
+        let queued = if up { member.last_seen = now(); member.reconnect_at = None; std::mem::take(&mut member.queued) } else { Vec::new() };
+        let due = (!up && after > 0).then(|| now() + after as i64 * 1000);
+        member.reconnect_at = due;
+        if up {
+            state.beat(agent);
+            state.event("ok", if automatic { format!("Reconnect attempt succeeded: the link to {agent} is back.") } else { format!("Link to {agent} restored.") });
+        } else {
+            let retry = if after > 0 { format!(" MiniClaw tries to reconnect in {after} s.") } else { String::new() };
+            state.event("warn", format!("Link to {agent} cut. It keeps working offline; no one waits for it.{retry}"));
+        }
+        Some((queued.into_iter().map(|item| (role, item)).collect(), due))
+    })
+}
+
+/// Delivers what an agent queued while its link was down.
+async fn replay(backend: &Backend, swarm: &Swarm, agent: &str, queued: Vec<(Role, Queued)>) {
+    for (role, item) in queued {
+        swarm.with(|state| state.event("info", format!("{agent} replays its queued result for #{}.", item.issue)));
+        deliver(backend, swarm, agent, role, item.issue, item.version, item.ok, &item.text).await;
+    }
+}
+
+/// Cuts or restores an agent's link; a restored agent replays what it queued. A cut starts the timer
+/// that reconnects it.
 pub(super) async fn link(State(backend): State<Shared>, Path(id): Path<String>, input: Body<Link>) -> Result<Json<Value>> {
     authorized(&backend).await?;
     let input = body(input)?;
     let swarm = find(&id).ok_or_else(missing)?;
-    let replay = swarm.with(|state| {
-        let member = state.member(&input.agent).filter(|member| member.role != Role::Lead)?;
-        if member.link_up == input.up { return Some(Vec::new()); }
-        member.link_up = input.up;
-        let (role, queued) = (member.role, if input.up { std::mem::take(&mut member.queued) } else { Vec::new() });
-        if input.up {
-            member.last_seen = now();
-            state.beat(&input.agent);
-            state.event("ok", format!("Link to {} restored.", input.agent));
-        } else {
-            state.event("warn", format!("Link to {} cut. It keeps working offline; no one waits for it.", input.agent));
-        }
-        Some(queued.into_iter().map(|item| (role, item)).collect::<Vec<_>>())
-    }).ok_or_else(invalid)?;
-    for (role, item) in replay {
-        swarm.with(|state| state.event("info", format!("{} replays its queued result for #{}.", input.agent, item.issue)));
-        deliver(&backend, &swarm, &input.agent, role, item.issue, item.version, item.ok, &item.text).await;
+    let after = input.reconnect_seconds.unwrap_or(RECONNECT_SECONDS).min(3600);
+    let (queued, due) = apply_link(&swarm, &input.agent, input.up, after, false).ok_or_else(invalid)?;
+    replay(&backend, &swarm, &input.agent, queued).await;
+    if let Some(at) = due {
+        let (backend, swarm, agent) = (backend.clone(), swarm.clone(), input.agent.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis((at - now()).max(0) as u64)).await;
+            // Only the cut this timer was set for: a restore, or a newer cut, replaces it.
+            let current = swarm.with(|state| state.member(&agent).is_some_and(|member| !member.link_up && member.reconnect_at == Some(at)));
+            if !current || swarm.stopped.load(Ordering::SeqCst) { return; }
+            if let Some((queued, _)) = apply_link(&swarm, &agent, true, 0, true) { replay(&backend, &swarm, &agent, queued).await; }
+        });
     }
     Ok(Json(swarm.snapshot(&backend).await))
 }
@@ -950,7 +987,7 @@ mod tests {
     fn ledger() -> Ledger {
         let time = now();
         let member = |name: &str, role| Member { name: name.into(), role, model: "m".into(), link_up: true, last_seen: time, status: String::new(),
-            issue: None, thread: None, queued: Vec::new(), done: 0, joined: time, unreachable_ms: 0 };
+            issue: None, thread: None, queued: Vec::new(), done: 0, joined: time, unreachable_ms: 0, reconnect_at: None };
         Ledger { status: "running", members: vec![member("Dev-1", Role::Dev), member("Dev-2", Role::Dev)], events: Vec::new(),
             leases: Default::default(), rounds: Default::default(), attempts: Default::default(), next_version: 0, finished: None }
     }
