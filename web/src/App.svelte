@@ -265,7 +265,7 @@
     </aside>
 
     <main class="flex min-h-0 min-w-0 flex-col">
-      {#if swarmOpen}<SwarmView bind:this={swarmView} {chat} target={swarmTarget} />{:else}
+      {#if swarmOpen}<SwarmView bind:this={swarmView} {chat} target={swarmTarget} onshow={id => swarmTarget = id} />{:else}
       <header
         class="flex min-h-14 items-center justify-between gap-2 border-b border-border
           px-2 py-1.5 sm:min-h-16 sm:gap-3 sm:px-6 sm:py-2"

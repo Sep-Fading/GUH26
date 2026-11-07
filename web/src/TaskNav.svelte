@@ -27,11 +27,21 @@
     onswarm?: (id: string) => void; activeSwarm?: string | null } = $props();
 
   // The swarms of this backend and earlier runs, newest first, refreshed every few seconds.
-  type SwarmItem = { id: string; goal: string; status: string; counts?: { done: number; total: number } };
+  type SwarmItem = { id: string; goal: string; status: string; projectId?: string | null; counts?: { done: number; total: number } };
+  // Which swarms show their agents' conversations; a running swarm starts open.
+  let openSwarms = $state<Record<string, boolean>>({});
+  const swarmOpen = (item: SwarmItem) => openSwarms[item.id] ?? (item.status === 'running' || item.status === 'planning' || item.id === activeSwarm);
+  const agentChats = (item: SwarmItem) => item.projectId ? chat.tasks.filter(task => task.projectId === item.projectId) : [];
   let swarms = $state<SwarmItem[]>([]);
   $effect(() => {
+    let ticks = 0;
     const read = () => fetch('/api/swarms', { cache: 'no-store' }).then(response => response.ok ? response.json() : null)
-      .then(value => { if (Array.isArray(value?.swarms)) swarms = value.swarms; }).catch(() => {});
+      .then(value => {
+        if (!Array.isArray(value?.swarms)) return;
+        swarms = value.swarms;
+        // While a swarm runs, its agents open new conversations; the list catches up every 6 s.
+        if (swarms.some(item => item.status === 'running' || item.status === 'planning') && ++ticks % 2 === 0) void chat.refresh();
+      }).catch(() => {});
     void read();
     const timer = setInterval(read, 3000);
     return () => clearInterval(timer);
@@ -159,13 +169,26 @@
   <!-- In this fork each swarm is a project; the swarms replace the Projects list. -->
   <h2 class="mb-2 pl-2 text-xs font-medium text-muted-foreground">Swarms</h2>
   {#each swarms as item (item.id)}
-    <button class={['flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm',
-      activeSwarm === item.id ? 'bg-sidebar-accent' : 'hover:bg-foreground/5']} onclick={() => onswarm(item.id)}
-      aria-current={activeSwarm === item.id ? 'true' : undefined}>
-      <span class={['size-2 shrink-0 rounded-full', swarmDot(item.status)]} aria-hidden="true"></span>
-      <span class="min-w-0 flex-1 truncate">{item.goal}</span>
-      <span class="shrink-0 text-xs tabular-nums text-muted-foreground">{item.counts?.done ?? 0}/{item.counts?.total ?? 0}</span>
-    </button>
+    <div class={['flex min-w-0 items-center rounded-md', activeSwarm === item.id ? 'bg-sidebar-accent' : 'hover:bg-foreground/5']}>
+      <button class="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground"
+        aria-label={`${swarmOpen(item) ? 'Hide' : 'Show'} the agents' conversations of ${item.goal}`} aria-expanded={swarmOpen(item)}
+        onclick={() => openSwarms[item.id] = !swarmOpen(item)}>
+        <ChevronRight size={13} class={swarmOpen(item) ? 'rotate-90' : ''} aria-hidden="true" />
+      </button>
+      <button class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-2 text-left text-sm" onclick={() => onswarm(item.id)}
+        aria-current={activeSwarm === item.id ? 'true' : undefined}>
+        <span class={['size-2 shrink-0 rounded-full', swarmDot(item.status)]} aria-hidden="true"></span>
+        <span class="min-w-0 flex-1 truncate">{item.goal}</span>
+        <span class="shrink-0 text-xs tabular-nums text-muted-foreground">{item.counts?.done ?? 0}/{item.counts?.total ?? 0}</span>
+      </button>
+    </div>
+    {#if swarmOpen(item)}
+      <div class="mb-1 ml-4 border-l border-border pl-1" role="group" aria-label={`Agents' conversations of ${item.goal}`}>
+        {#each agentChats(item) as task (task.id)}
+          {@render row(task)}
+        {:else}<p class="px-2 py-1.5 text-xs text-muted-foreground">No conversations yet</p>{/each}
+      </div>
+    {/if}
   {:else}<p class="px-2 py-2 text-xs text-muted-foreground">No swarms yet</p>{/each}
   <h2 class="mb-2 mt-6 px-2 text-xs font-medium text-muted-foreground">Conversations</h2>
   {#each chat.tasks.filter(t => !t.projectId) as task (task.id)}

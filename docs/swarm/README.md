@@ -31,7 +31,9 @@ gets Anthropic skills (Apache 2.0), listed in
 [`server/swarm-skills/NOTICE.md`](../../server/swarm-skills/NOTICE.md).
 
 **Each swarm is a MiniClaw project** with the swarm's folder as its workspace, so all its agents'
-conversations belong to it. The sidebar lists swarms instead of projects. Swarms are saved under the
+conversations belong to it. The sidebar lists swarms instead of projects; expand a swarm to see
+its agents' conversations, each titled by its agent and task (`Dev-1 · #2 Web page`,
+`Lead · plan`). Opening one shows exactly what that agent did. Swarms are saved under the
 data folder (`swarms/<id>.json`), so the list survives a restart. One that was running when the
 backend stopped shows as interrupted.
 

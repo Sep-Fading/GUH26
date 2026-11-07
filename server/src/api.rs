@@ -1629,13 +1629,15 @@ async fn tasks(
         let id = summary["id"].as_str().ok_or_else(unavailable)?.to_owned();
         if backend.agents.chat_removed(id.clone()).await? { continue; }
         // A delegated run shows inside its parent until the user makes it a conversation.
-        if hidden_runs.contains(&id) || swarm::hides(&id) || swarm::looks_like_swarm(&summary) { continue; }
+        if hidden_runs.contains(&id) { continue; }
         match tag_context(&backend, &id, &mut summary).await {
             Err(error) if error.1 == "chat_creation_uncertain" => {
                 summary["recoveryRequired"] = json!(true);
             }
             result => result?,
         }
+        // A swarm agent's conversation shows under its swarm; older ones without a project stay hidden.
+        if summary["projectId"].is_null() && (swarm::hides(&id) || swarm::looks_like_swarm(&summary)) { continue; }
         visible.push(summary);
     }
     result["threads"] = json!(visible);
@@ -1656,7 +1658,8 @@ async fn tasks(
     // Newly created chats may not have reached Codex's saved list yet.
     if query.cursor.is_none() {
         for chat in data.chats.values() {
-            if chat.summary["id"].as_str().is_some_and(|id| hidden_runs.contains(id) || swarm::hides(id)) || swarm::looks_like_swarm(&chat.summary) { continue; }
+            if chat.summary["id"].as_str().is_some_and(|id| hidden_runs.contains(id)) { continue; }
+            if chat.summary["projectId"].is_null() && (chat.summary["id"].as_str().is_some_and(swarm::hides) || swarm::looks_like_swarm(&chat.summary)) { continue; }
             if !threads.iter().any(|summary| summary["id"] == chat.summary["id"]) {
                 threads.push(chat.summary.clone());
             }

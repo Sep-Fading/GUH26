@@ -103,3 +103,12 @@ Checked on Linux:
   section. macOS and Windows have not been run.
 
 Still not committed or pushed.
+
+Agent conversations under their swarm (user request, 2026-11-07): every agent conversation is named
+`<agent> · #<task> <title>` (the lead's is `Lead · plan`) through `name_chat`, so the name is the
+user's and stays. Swarm conversations are no longer hidden; only old ones without a project are.
+TaskNav nests them under each swarm row, which expands with a chevron. Running swarms and the one
+on screen start open. While a swarm runs, the conversation list refreshes every 6 s.
+Checked: a real run (1 dev, 1 review, 1 test). The review asked for changes, the fix was made and
+then approved, 5/5 tasks were done in 1:28, and the sidebar showed the titled conversations under
+the swarm. svelte-check is clean.

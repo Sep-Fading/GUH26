@@ -22,7 +22,7 @@
     members: Member[]; tasks: Task[]; events: Event[]; counts: { done: number; total: number } };
 
   // `target` is the swarm the sidebar chose; none means a new one.
-  let { chat, target = null }: { chat: Chat; target?: string | null } = $props();
+  let { chat, target = null, onshow = () => {} }: { chat: Chat; target?: string | null; onshow?: (id: string | null) => void } = $props();
 
   const EXAMPLES = [
     'Build a URL shortener in Python with a small HTTP API, a web page and tests',
@@ -63,6 +63,9 @@
     if (!response.ok) throw new Error(value.error?.message ?? 'The request failed.');
     return value as T;
   }
+
+  // Tells the sidebar which swarm is on screen, so it stays highlighted and open there.
+  $effect(() => { onshow(swarm?.id ?? null); });
 
   const final = (status?: string) => status === 'done' || status === 'failed' || status === 'stopped' || status === 'interrupted';
 

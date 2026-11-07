@@ -323,7 +323,7 @@ impl Swarm {
 
 /// Opens one agent conversation in the shared folder, sends `prompt` and waits for its answer,
 /// renewing `name`'s lease while it works.
-async fn turn(backend: &Shared, swarm: &Arc<Swarm>, name: &str, model: &str, prompt: &str) -> std::result::Result<String, String> {
+async fn turn(backend: &Shared, swarm: &Arc<Swarm>, name: &str, title: &str, model: &str, prompt: &str) -> std::result::Result<String, String> {
     let words = |error: Error| error.2.to_owned();
     let mut capabilities = std::collections::BTreeMap::new();
     capabilities.insert("full_access".to_owned(), true);
@@ -335,6 +335,8 @@ async fn turn(backend: &Shared, swarm: &Arc<Swarm>, name: &str, model: &str, pro
         environment: Some(Assignment::Host {}.choice()), delegated: true }).await.map_err(words)?;
     let thread = created.1.0["thread"]["id"].as_str().ok_or("The agent's conversation could not be created.")?.to_owned();
     threads().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(thread.clone());
+    // The conversation is titled by its agent, so the swarm's list reads "Dev-1 · #2 Web page".
+    let _ = name_chat(State(backend.clone()), Path(thread.clone()), Ok(Json(Named { name: clip(title, 80) }))).await;
     swarm.with(|state| if let Some(member) = state.member(name) { member.thread = Some(thread.clone()); });
     // The swarm's project owns the folder. Without a project (it could not be made), the agent's
     // own conversation is granted it.
@@ -437,7 +439,7 @@ async fn run(backend: Shared, swarm: Arc<Swarm>, lead_model: String, team: Vec<(
     let count = |role| team.iter().filter(|member| member.1 == role).count();
     let (devs, reviews, tests) = (count(Role::Dev), count(Role::Review), count(Role::Test));
     let prompt = plan_prompt(&swarm.goal, &swarm.workspace, devs, reviews, tests);
-    let answer = turn(&backend, &swarm, "Lead", &lead_model, &prompt).await;
+    let answer = turn(&backend, &swarm, "Lead", "Lead · plan", &lead_model, &prompt).await;
     let plan = match &answer {
         Ok(text) => read_plan(text, &swarm.goal, tests),
         Err(reason) => {
@@ -581,7 +583,7 @@ async fn worker(backend: Shared, swarm: Arc<Swarm>, name: String, role: Role, mo
             Ok(Some(task)) => task,
         };
         let prompt = task_prompt(&swarm, &name, &task);
-        let outcome = turn(&backend, &swarm, &name, &model, &prompt).await;
+        let outcome = turn(&backend, &swarm, &name, &format!("{name} · #{} {}", task.id, task.title), &model, &prompt).await;
         let (ok, text) = match outcome { Ok(text) => (true, text), Err(reason) => (false, reason) };
         swarm.with(|state| {
             let up = state.member(&name).is_some_and(|member| member.link_up);
