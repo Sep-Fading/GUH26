@@ -368,6 +368,7 @@ impl Store {
         crate::names::migrate(&connection)?;
         crate::speeds::migrate(&connection)?;
         crate::project_memory::migrate(&connection)?;
+        crate::issues::migrate(&connection)?;
         crate::project_history::migrate(&connection)?;
         crate::analytics::migrate(&connection)?;
         Ok(Self(Arc::new(Mutex::new(connection)), guard))

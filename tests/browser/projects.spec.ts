@@ -306,3 +306,15 @@ test('project settings list the shared memory, and notes are added, changed and 
   const { notes } = await (await app.request(`/api/projects/${project.id}/memory`)).json();
   expect(notes.map((note: { name: string }) => note.name)).toEqual(['Game engine']);
 });
+
+test('project settings offer the issue review level, saved at once', async ({ page, app }) => {
+  const { project } = await (await app.request('/api/projects', { method: 'POST', body: { name: 'Game', environment: { kind: 'host' } } })).json();
+  await page.goto(app.url);
+  const nav = await navigation(page);
+  await nav.getByRole('button', { name: 'Settings for Game', exact: true }).click();
+  const issues = page.getByRole('dialog', { name: 'Project settings', exact: true }).getByRole('region', { name: 'Issues' });
+  const level = issues.getByRole('group', { name: 'Agents may close without review' });
+  await expect(level.getByRole('radio', { name: /^Low \(default\)/ })).toBeChecked();
+  await level.getByRole('radio', { name: /^Everything/ }).check();
+  await expect.poll(async () => (await (await app.request(`/api/projects/${project.id}/issue-settings`)).json()).closeWithoutReview).toBe('high');
+});

@@ -11,9 +11,47 @@ use crate::delegations::Run;
 // Reads an agent's delegation limits.
 use crate::agents::Delegation;
 
+/// Auto delegation, a switch for the whole installation: every agent may hand tasks to every other
+/// active agent, and a hand-off starts at once as "Wait for it" instead of asking the user.
+static AUTO: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
+
+/// Where the switch is kept, beside MiniClaw's other data.
+fn auto_file() -> std::path::PathBuf { crate::platform_fs::data_directory().join("auto-delegation.json") }
+
+/// Whether auto delegation is on, read from its file the first time.
+pub(super) fn auto() -> bool {
+    AUTO.get_or_init(|| std::sync::atomic::AtomicBool::new(std::fs::read(auto_file()).ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()).is_some_and(|value| value["on"] == true)))
+        .load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Answers whether auto delegation is on.
+pub(super) async fn auto_view(State(backend): State<Shared>) -> Result<Json<Value>> {
+    authorized(&backend).await?;
+    Ok(Json(json!({ "on": auto() })))
+}
+
+/// The switch's new position.
+#[derive(Deserialize)]
+pub(super) struct Auto { on: bool }
+
+/// Turns auto delegation on or off for every agent, and keeps the choice across restarts.
+pub(super) async fn auto_save(State(backend): State<Shared>, input: Body<Auto>) -> Result<Json<Value>> {
+    authorized(&backend).await?;
+    let on = body(input)?.on;
+    let _ = auto();
+    std::fs::create_dir_all(crate::platform_fs::data_directory()).map_err(|_| unavailable())?;
+    std::fs::write(auto_file(), json!({ "on": on }).to_string()).map_err(|_| unavailable())?;
+    if let Some(flag) = AUTO.get() { flag.store(on, std::sync::atomic::Ordering::SeqCst); }
+    backend.changed();
+    Ok(Json(json!({ "on": on })))
+}
+
 /// How long a request waits for the user's answer before it counts as declined.
 const ANSWER: Duration = Duration::from_secs(120);
 const NAME: &str = "miniclaw_delegate";
+/// The result of a run a person stopped while it worked. Recorded as `cancelled`.
+const STOPPED: &str = "It was stopped by the user.";
 
 /// Describes the tool with the agents this one may use, and its limits when they could be read. A
 /// model cannot name any other agent.
@@ -42,6 +80,12 @@ pub(super) fn tool_definition(recipients: &[String], limits: Option<&Delegation>
 /// for the main agent (no agent), every active agent (the user's decision, 2026-09-22). The user
 /// is asked at every hand-off either way. A delegated run gets none.
 pub(super) async fn recipients(backend: &Backend, agent: Option<&crate::agents::Agent>) -> Vec<(Uuid, String)> {
+    // With auto delegation every agent may reach every other active agent.
+    if auto() {
+        return backend.agents.list().await.unwrap_or_default().into_iter()
+            .filter(|other| agent.is_none_or(|agent| agent.id != other.id) && other.definition.active && other.definition.supported())
+            .map(|other| (other.id, other.definition.name)).collect();
+    }
     if agent.is_some_and(|agent| agent.definition.delegates_to.is_empty()) { return Vec::new(); }
     backend.agents.list().await.unwrap_or_default().into_iter()
         .filter(|other| agent.is_none_or(|agent| agent.definition.delegates_to.contains(&other.id)) && other.definition.active
@@ -216,16 +260,20 @@ async fn handle(backend: &Shared, params: &Value) -> Value {
     let Ok(Some(run)) = backend.agents.begin_run(run).await else { return refusal("This request was already handled.") };
     publish(backend, parent, "delegation", json!(run)).await;
 
-    let (answer, answered) = tokio::sync::oneshot::channel();
-    // The page tells the user how long the run may take either way before they choose.
-    let prompt = json!({ "id": run.id, "agent": run.agent, "task": run.task, "summary": run.summary, "attachments": run.attachments,
-        "minutes": limits.minutes, "waitMinutes": limits.wait_minutes(), "expiresInSeconds": ANSWER.as_secs(),
-        "expiresAt": chrono::Utc::now().timestamp_millis() + ANSWER.as_millis() as i64 });
-    backend.delegation_prompts.lock().await.insert(parent.to_owned(), (prompt.clone(), answer));
-    publish(backend, parent, "delegation.prompt", prompt).await;
-    let mode = tokio::time::timeout(ANSWER, answered).await.ok().and_then(|answer| answer.ok());
-    backend.delegation_prompts.lock().await.remove(parent);
-    publish(backend, parent, "delegation.prompt", Value::Null).await;
+    // With auto delegation nobody is asked: the hand-off starts at once as "Wait for it".
+    let mode = if auto() { Some("wait".to_owned()) } else {
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        // The page tells the user how long the run may take either way before they choose.
+        let prompt = json!({ "id": run.id, "agent": run.agent, "task": run.task, "summary": run.summary, "attachments": run.attachments,
+            "minutes": limits.minutes, "waitMinutes": limits.wait_minutes(), "expiresInSeconds": ANSWER.as_secs(),
+            "expiresAt": chrono::Utc::now().timestamp_millis() + ANSWER.as_millis() as i64 });
+        backend.delegation_prompts.lock().await.insert(parent.to_owned(), (prompt.clone(), answer));
+        publish(backend, parent, "delegation.prompt", prompt).await;
+        let mode = tokio::time::timeout(ANSWER, answered).await.ok().and_then(|answer| answer.ok());
+        backend.delegation_prompts.lock().await.remove(parent);
+        publish(backend, parent, "delegation.prompt", Value::Null).await;
+        mode
+    };
     let finish = |status: &'static str, result: String| { let (backend, id, parent) = (backend.clone(), run.id.clone(), parent.to_owned());
         async move {
             if let Ok(Some(run)) = backend.agents.update_run(id, None, None, status.into(), Some(result)).await {
@@ -296,7 +344,12 @@ async fn execute(backend: &Shared, run: Run, mode: &str, minutes: u64, mut hando
     // A waited run handed over at the hour ends as a background run.
     let mut mode = mode.to_owned();
     let outcome = attempt(backend, &run, &mut mode, minutes, &mut handover).await;
-    let (status, text) = match &outcome { Ok(text) => ("done", text.clone()), Err(reason) => ("failed", reason.clone()) };
+    let (status, text) = match &outcome {
+        Ok(text) => ("done", text.clone()),
+        // Stopped by a person (the Agents page's kill switch or the run's own Stop), not by a fault.
+        Err(reason) if reason == STOPPED => ("cancelled", reason.clone()),
+        Err(reason) => ("failed", reason.clone()),
+    };
     live().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&run.id);
     if let Ok(Some(done)) = backend.agents.update_run(run.id.clone(), None, None, status.into(), Some(text)).await {
         publish(backend, &run.parent, "delegation", json!(done)).await;
@@ -399,6 +452,9 @@ async fn attempt(backend: &Shared, run: &Run, mode: &mut String, minutes: u64, h
             publish(backend, &run.parent, "delegation.live", json!({ "id": run.id, "line": line })).await;
         }
         if let Some(status) = finished {
+            // MiniClaw's own limits stop a run above, before its turn is seen ending; an interrupted
+            // turn seen here was stopped by a person.
+            if status == "interrupted" { return Err(STOPPED.into()); }
             if status != "completed" { return Err(format!("The delegated response ended with status {status}.")); }
             return answer.filter(|text| !text.trim().is_empty()).ok_or_else(|| "It ended without an answer.".into());
         }

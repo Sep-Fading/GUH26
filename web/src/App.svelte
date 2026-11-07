@@ -56,6 +56,8 @@
   import SettingsIcon from '@lucide/svelte/icons/settings';
   // Swarm mission control: many agents, one goal.
   import SwarmView from './SwarmView.svelte';
+  // Marks the auto delegation switch.
+  import Workflow from '@lucide/svelte/icons/workflow';
   // Selects skills without reloading conversation content.
   import ConversationSkills from './ConversationSkills.svelte';
   // Shows saved consent sources for this conversation.
@@ -87,8 +89,19 @@
   import WorkspacePanel from './WorkspacePanel.svelte';
   // Owns reactive chat state and API calls.
   import { Chat } from './chat.svelte';
+  // Each agent's figures: averages, tokens, health, running time, activity and share of the work.
+  import AgentStats from './AgentStats.svelte';
+  // The same kill switch, floating over the chat while any agent is working.
+  import RunningAgents from './RunningAgents.svelte';
+  import ChartPie from '@lucide/svelte/icons/chart-pie';
 
   const chat = new Chat();
+  // Which page fills the main column: the conversation or the Agents page.
+  let view = $state<'chat' | 'agents'>('chat');
+  // The conversation open when the Agents page was opened; picking another one returns to chat.
+  let agentsFrom: string | undefined;
+  function openAgents() { navigationOpen = false; agentsFrom = chat.active?.id; view = 'agents'; }
+  $effect(() => { if (view === 'agents' && chat.active?.id !== agentsFrom) view = 'chat'; });
   // How MiniClaw's own messages begin (`delegation.rs` NOTICE); the page shows them as a notice line.
   const NOTICE = '[MiniClaw notice] ';
   let conversation = $state<HTMLElement>();
@@ -103,6 +116,23 @@
   let swarmOpen = $state(false);
   let swarmView = $state<SwarmView>();
   let swarmTarget = $state<string | null>(null);
+  // Auto delegation, read from the backend once the page is ready.
+  let autoDelegation = $state(false);
+  let autoBusy = $state(false);
+  $effect(() => {
+    if (!chat.ready) return;
+    void fetch('/api/delegation/auto', { cache: 'no-store' }).then(response => response.ok ? response.json() : null)
+      .then(value => { if (typeof value?.on === 'boolean') autoDelegation = value.on; }).catch(() => {});
+  });
+  async function toggleAutoDelegation() {
+    autoBusy = true;
+    try {
+      const response = await fetch('/api/delegation/auto', { method: 'POST', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-MiniClaw-Request': '1' }, body: JSON.stringify({ on: !autoDelegation }) });
+      const value = await response.json().catch(() => ({}));
+      if (response.ok && typeof value.on === 'boolean') autoDelegation = value.on;
+    } finally { autoBusy = false; }
+  }
   let searchOpen = $state(false);
   let slashMenu = $state<SlashMenu>();
   // True while files are dragged over the composer.
@@ -211,7 +241,7 @@
        the sidebar is a drawer, which closes so the new conversation is in view. -->
   <div class="px-4">
     <button class="new-chat" disabled={!chat.ready || chat.working || chat.switching}
-      onclick={() => { navigationOpen = false; swarmOpen = false; void chat.newChat(); }}>
+      onclick={() => { navigationOpen = false; swarmOpen = false; view = 'chat'; void chat.newChat(); }}>
       <SquarePen size={17} aria-hidden="true" />
       New chat
     </button>
@@ -222,9 +252,24 @@
       <Search size={17} aria-hidden="true" />Search
     </button>
     <button class={['flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm hover:bg-foreground/5 hover:text-foreground',
-      swarmOpen ? 'bg-foreground/5 text-foreground' : 'text-muted-foreground']} aria-pressed={swarmOpen}
-      onclick={() => { navigationOpen = false; swarmTarget = null; if (swarmOpen) swarmView?.reset(); swarmOpen = true; }}>
-      <Users size={17} aria-hidden="true" />{swarmOpen ? 'New swarm' : 'Swarm'}
+      swarmOpen && view !== 'agents' ? 'bg-foreground/5 text-foreground' : 'text-muted-foreground']} aria-pressed={swarmOpen && view !== 'agents'}
+      onclick={() => { navigationOpen = false; swarmTarget = null; if (swarmOpen && view !== 'agents') swarmView?.reset(); swarmOpen = true; view = 'chat'; }}>
+      <Users size={17} aria-hidden="true" />{swarmOpen && view !== 'agents' ? 'New swarm' : 'Swarm'}
+    </button>
+    <button class="mt-1 flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm hover:bg-foreground/5
+      hover:text-foreground disabled:opacity-50 {view === 'agents' ? 'bg-foreground/5 text-foreground' : 'text-muted-foreground'}"
+      aria-current={view === 'agents' ? 'page' : undefined} disabled={!chat.ready} onclick={openAgents}>
+      <ChartPie size={17} aria-hidden="true" />Agents
+    </button>
+    <!-- Auto delegation: one switch for every agent. On, agents hand tasks to any active agent without asking. -->
+    <button class="mt-1 flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm text-muted-foreground
+      hover:bg-foreground/5 hover:text-foreground disabled:opacity-50" role="switch" aria-checked={autoDelegation}
+      disabled={!chat.ready || autoBusy} title="When on, every agent may hand tasks to any active agent, and hand-offs start without asking you"
+      onclick={toggleAutoDelegation}>
+      <Workflow size={17} aria-hidden="true" /><span class="flex-1">Auto delegation</span>
+      <span class={['relative h-4 w-7 shrink-0 rounded-full transition-colors', autoDelegation ? 'bg-brand' : 'bg-input']} aria-hidden="true">
+        <span class={['absolute top-0.5 size-3 rounded-full bg-background shadow transition-[left]', autoDelegation ? 'left-3.5' : 'left-0.5']}></span>
+      </span>
     </button>
   </div>
 {/snippet}
@@ -258,14 +303,21 @@
       {@render newChatRow()}
 
       <TaskNav {chat} onselect={() => swarmOpen = false} activeSwarm={swarmOpen ? swarmTarget : null}
-        onswarm={id => { swarmTarget = id; swarmOpen = true; }} />
+        onswarm={id => { swarmTarget = id; swarmOpen = true; view = 'chat'; }}
+        ondeleted={id => { if (swarmTarget === id) { swarmTarget = null; swarmView?.reset(); } }} />
 
       {@render settingsRow()}
       <SidebarResize bind:width={navigationWidth} actual={navigationActualWidth} />
     </aside>
 
+    {#if view === 'agents'}
     <main class="flex min-h-0 min-w-0 flex-col">
-      {#if swarmOpen}<SwarmView bind:this={swarmView} {chat} target={swarmTarget} onshow={id => swarmTarget = id} />{:else}
+      <AgentStats {chat} onclose={() => view = 'chat'} />
+    </main>
+    {:else}
+    <main class="flex min-h-0 min-w-0 flex-col">
+      {#if swarmOpen}<SwarmView bind:this={swarmView} {chat} target={swarmTarget} onshow={id => swarmTarget = id} onagents={openAgents}
+        onlead={thread => { swarmOpen = false; view = 'chat'; void chat.select(chat.tasks.find(task => task.id === thread) ?? { id: thread, name: 'Lead', model: null }); }} />{:else}
       <header
         class="flex min-h-14 items-center justify-between gap-2 border-b border-border
           px-2 py-1.5 sm:min-h-16 sm:gap-3 sm:px-6 sm:py-2"
@@ -285,7 +337,7 @@
                 </div>
                 {@render newChatRow()}
                 <TaskNav {chat} onselect={() => { navigationOpen = false; swarmOpen = false; }} activeSwarm={swarmOpen ? swarmTarget : null}
-                  onswarm={id => { navigationOpen = false; swarmTarget = id; swarmOpen = true; }} />
+                  onswarm={id => { navigationOpen = false; swarmTarget = id; swarmOpen = true; view = 'chat'; }} />
                 {@render settingsRow()}
               </Dialog.Content>
             </Dialog.Portal>
@@ -376,6 +428,8 @@
       <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
       <div class="flex min-h-0 min-w-0 flex-1 flex-col">
       <div class="relative flex min-h-0 flex-1 flex-row">
+      <!-- Floats over the conversation while any agent works anywhere, with the Agents page's kill switch. -->
+      {#if chat.ready}<RunningAgents {chat} onopen={openAgents} />{/if}
       <ConversationRail messages={chat.messages} viewport={conversation}
         onjump={() => { follow = false; jumping = true; }} />
       <section
@@ -867,5 +921,6 @@
       </div>
       {/if}
     </main>
+    {/if}
   </div>
 </Tooltip.Provider>

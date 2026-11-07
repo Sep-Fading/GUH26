@@ -244,6 +244,7 @@ fn standing_for(input: &Standing, windows: bool, closed: Option<&str>) -> String
     }
     if has(crate::project_tool::TOOL) {
         text.push_str("- miniclaw_project holds what this project's conversations share. Its memory is a set of short notes: you are told their names once, read one when it matters, and save what a later conversation will need. Its description says what belongs there.\n");
+        text.push_str("  It also holds the project's issues, its known bugs and features. File each bug you notice and will not fix now with issue_create, after issue_list shows it is not there yet. Claim an issue before working on it (it moves from Backlog to In Dev), move it through issue_stage (dev, qa, agent_review) as you work, which the user watches live on a board; only its owner finishes it with issue_done or lets go with issue_release and a handover. The environment note says which severities you may close yourself; the rest wait for the user's review.\n");
     }
     text.push_str(if input.web_search { "- Web search is available through your provider.\n" }
         else { "- Web search is switched off for this conversation.\n" });

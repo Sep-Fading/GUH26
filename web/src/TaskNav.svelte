@@ -23,14 +23,31 @@
   // Shares task selection with the conversation interface.
   import type { Chat, Task } from './chat.svelte';
 
-  let { chat, onselect = () => {}, onswarm = () => {}, activeSwarm = null }: { chat: Chat; onselect?: () => void;
-    onswarm?: (id: string) => void; activeSwarm?: string | null } = $props();
+  let { chat, onselect = () => {}, onswarm = () => {}, activeSwarm = null, ondeleted = () => {} }: { chat: Chat; onselect?: () => void;
+    onswarm?: (id: string) => void; activeSwarm?: string | null; ondeleted?: (id: string) => void } = $props();
 
   // The swarms of this backend and earlier runs, newest first, refreshed every few seconds.
   type SwarmItem = { id: string; goal: string; status: string; projectId?: string | null; counts?: { done: number; total: number } };
+  // Each swarm shows its Lead; its other agents' conversations fold into one group, closed at first.
+  let openAgents = $state<Record<string, boolean>>({});
+  const leadChat = (item: SwarmItem) => agentChats(item).find(task => task.name === 'Lead');
+  const otherChats = (item: SwarmItem) => agentChats(item).filter(task => task.name !== 'Lead');
+
+  // Deletes a swarm with its project, conversations and stories; its files stay in its folder.
+  async function deleteSwarm(item: SwarmItem) {
+    const response = await fetch(`/api/swarms/${item.id}/delete`, { method: 'POST', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', 'X-MiniClaw-Request': '1' }, body: '{}' });
+    if (!response.ok) {
+      const value = await response.json().catch(() => ({}));
+      throw new Error(value.error?.message ?? 'The swarm could not be deleted.');
+    }
+    swarms = swarms.filter(other => other.id !== item.id);
+    ondeleted(item.id);
+    void chat.refresh();
+  }
   // Which swarms show their agents' conversations; a running swarm starts open.
   let openSwarms = $state<Record<string, boolean>>({});
-  const swarmOpen = (item: SwarmItem) => openSwarms[item.id] ?? (item.status === 'running' || item.status === 'planning' || item.id === activeSwarm);
+  const swarmOpen = (item: SwarmItem) => openSwarms[item.id] ?? (['running', 'planning', 'idle'].includes(item.status) || item.id === activeSwarm);
   const agentChats = (item: SwarmItem) => item.projectId ? chat.tasks.filter(task => task.projectId === item.projectId) : [];
   let swarms = $state<SwarmItem[]>([]);
   $effect(() => {
@@ -47,7 +64,7 @@
     return () => clearInterval(timer);
   });
   const swarmDot = (status: string) => status === 'running' || status === 'planning' ? 'bg-brand'
-    : status === 'done' ? 'bg-success' : status === 'failed' ? 'bg-destructive' : 'bg-[#c7c7cc]';
+    : status === 'done' || status === 'idle' ? 'bg-success' : status === 'failed' ? 'bg-destructive' : 'bg-[#c7c7cc]';
 
   // Opens an existing conversation and dismisses mobile navigation.
   function select(task: Task) { void chat.select(task); onselect(); }
@@ -175,18 +192,33 @@
         onclick={() => openSwarms[item.id] = !swarmOpen(item)}>
         <ChevronRight size={13} class={swarmOpen(item) ? 'rotate-90' : ''} aria-hidden="true" />
       </button>
-      <button class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-2 text-left text-sm" onclick={() => onswarm(item.id)}
+      <button class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 text-left text-sm" onclick={() => onswarm(item.id)}
         aria-current={activeSwarm === item.id ? 'true' : undefined}>
         <span class={['size-2 shrink-0 rounded-full', swarmDot(item.status)]} aria-hidden="true"></span>
         <span class="min-w-0 flex-1 truncate">{item.goal}</span>
         <span class="shrink-0 text-xs tabular-nums text-muted-foreground">{item.counts?.done ?? 0}/{item.counts?.total ?? 0}</span>
       </button>
+      <span class="nav-actions flex shrink-0 items-center">
+        <ConfirmDelete label={`Delete swarm ${item.goal}`} actionLabel="Delete swarm"
+          description={`Permanently delete this swarm, its stories and every agent's conversation? This cannot be undone. The files its agents made stay in its folder.`}
+          disabled={!chat.ready} action={() => deleteSwarm(item)} />
+      </span>
     </div>
     {#if swarmOpen(item)}
-      <div class="mb-1 ml-4 border-l border-border pl-1" role="group" aria-label={`Agents' conversations of ${item.goal}`}>
-        {#each agentChats(item) as task (task.id)}
-          {@render row(task)}
-        {:else}<p class="px-2 py-1.5 text-xs text-muted-foreground">No conversations yet</p>{/each}
+      <div class="mb-1 ml-4 border-l border-border pl-1" role="group" aria-label={`Conversations of ${item.goal}`}>
+        {#if leadChat(item)}{@render row(leadChat(item)!)}{:else}<p class="px-2 py-1.5 text-xs text-muted-foreground">The Lead starts in a moment</p>{/if}
+        {#if otherChats(item).length}
+          <button class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-foreground/5"
+            aria-expanded={openAgents[item.id] ?? false} onclick={() => openAgents[item.id] = !(openAgents[item.id] ?? false)}>
+            <ChevronRight size={12} class={openAgents[item.id] ? 'rotate-90' : ''} aria-hidden="true" />
+            Agents <span class="tabular-nums">{otherChats(item).length}</span>
+          </button>
+          {#if openAgents[item.id]}
+            <div class="ml-3" role="group" aria-label={`Agents' conversations of ${item.goal}`}>
+              {#each otherChats(item) as task (task.id)}{@render row(task)}{/each}
+            </div>
+          {/if}
+        {/if}
       </div>
     {/if}
   {:else}<p class="px-2 py-2 text-xs text-muted-foreground">No swarms yet</p>{/each}

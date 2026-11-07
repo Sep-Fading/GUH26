@@ -1,8 +1,13 @@
 # Swarm
 
-Several agents work towards one shared goal. A lead agent splits the goal into tasks on a shared
-ledger; development and testing agents claim tasks from the ledger and never talk to each other.
-When an agent's link drops, the rest of the swarm keeps going.
+Several agents work towards one shared goal. Each swarm is a project, and its work is the project's
+issues (Adam's issue system): the lead files the goal as features and bugs in the Backlog,
+development agents take issues in Backlog or In Dev, testing agents take issues in QA, and code
+review agents take issues in Agent review. Idle agents keep looking for an issue they can take.
+Agents never talk to each other, only to the issues, so when an agent's link drops the rest keep
+going. Progress is the project's Board and Issues; the agents, their links (Cut / Restore) and
+the latest event are in the running box (David's) beside them. The swarm-specific `tasks` and
+ledger fields below are superseded by the issues: read `/api/projects/{projectId}/issues`.
 
 Code: [`server/src/api/swarm.rs`](../../server/src/api/swarm.rs) (backend),
 [`web/src/SwarmView.svelte`](../../web/src/SwarmView.svelte) (mission control page).

@@ -668,8 +668,10 @@ test('a stopped child with partial text is not reported as finished successfully
   await app.emit({ method: 'item/agentMessage/delta', params: { threadId: OTHER, turnId: TURN, itemId: 'partial', delta: 'Still reviewing.' } },
     { method: 'turn/completed', params: { threadId: OTHER, turn: { id: TURN, status: 'interrupted', items: [] } } });
   const final = await eventually(() => snapshot(app), value => value.delegations[0].status !== 'running');
-  assert.equal(final.delegations[0].status, 'failed');
-  assert.match(final.delegations[0].result, /interrupted/);
+  // Requirement change (Scattz1 fork, 2026-11-07): a run whose turn was interrupted was stopped by a
+  // person, so it ends as cancelled rather than failed. Either way it is not reported as done.
+  assert.equal(final.delegations[0].status, 'cancelled');
+  assert.match(final.delegations[0].result, /stopped by the user/);
 });
 
 test('opening a waiting run preserves its work when the parent ends', async t => {

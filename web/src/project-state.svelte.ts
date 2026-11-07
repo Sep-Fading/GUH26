@@ -7,6 +7,37 @@ export type Project = { id: string; name: string; agentIds: string[]; skillIds: 
 // One note of a project's shared memory.
 export type MemoryNote = { name: string; description: string; text: string; updatedAt: number };
 export type ProjectDraft = Omit<Project, 'id' | 'revision'> & { revision?: number };
+// A project's issues: severity, status and who may close without review (server/src/issues.rs).
+export type IssueSeverity = 'low' | 'medium' | 'high';
+// Board order: Backlog, In Dev, QA, Review (agents), Human Review (the user), Closed.
+export type IssueStatus = 'backlog' | 'dev' | 'qa' | 'agent_review' | 'review' | 'closed';
+export const STAGES: { id: IssueStatus; label: string }[] = [
+  { id: 'backlog', label: 'Backlog' }, { id: 'dev', label: 'In Dev' }, { id: 'qa', label: 'QA' },
+  { id: 'agent_review', label: 'Review' }, { id: 'review', label: 'Human Review' }, { id: 'closed', label: 'Closed' }];
+// Names a stage the way the board does.
+export const stageLabel = (status: IssueStatus) => STAGES.find(stage => stage.id === status)?.label ?? status;
+// Whether an issue is still being worked on: neither waiting for the user nor closed.
+export const activeStage = (status: IssueStatus) => status !== 'review' && status !== 'closed';
+
+// Calls onchange whenever a project's issues change: at once through the backend's live stream, and every
+// 30 s in case an event was missed. A reconnected stream also reloads. Returns the function that stops it.
+export function watchIssues(projectId: string, onchange: () => void, fallbackMs = 30000) {
+  let source: EventSource | undefined;
+  if (typeof EventSource !== 'undefined') {
+    let first = true;
+    source = new EventSource(`/api/projects/${encodeURIComponent(projectId)}/issues/live`);
+    source.addEventListener('ready', () => { if (!first) onchange(); first = false; });
+    source.addEventListener('issues', () => onchange());
+  }
+  const timer = setInterval(onchange, fallbackMs);
+  return () => { source?.close(); clearInterval(timer); };
+}
+export type ReviewLevel = 'none' | 'low' | 'medium' | 'high';
+// One entry in an issue's history; kind is filed, claim, handover, done, closed, comment, severity, owner or reopened.
+export type IssueEvent = { at: number; author: string; kind: string; text: string };
+export type ProjectIssue = { number: number; kind: 'bug' | 'feature'; title: string; text: string; severity: IssueSeverity;
+  tags: string[]; status: IssueStatus; owner: string | null; ownerId: string | null; createdBy: string;
+  createdAt: number; updatedAt: number; events?: IssueEvent[] };
 export type VmSetup = { vmId?: string; state: 'off' | 'starting' | 'running' |
   'failed' | 'missing' | 'unknown'; stage?: 'preparing' | 'installing' |
     'awaiting_setup' | 'failed'; percent?: number; ready?: boolean;
@@ -102,6 +133,28 @@ export class Projects {
     return this.api(`/api/projects/${id}/memory${replaces ? `/${encodeURIComponent(replaces)}` : ''}`, note);
   }
   removeMemory(id: string, name: string) { return this.api(`/api/projects/${id}/memory/${encodeURIComponent(name)}/delete`, {}); }
+
+  // Lists a project's issues by words and status, with what agents may close without review.
+  issues(id: string, query = '', status?: IssueStatus) {
+    const search = new URLSearchParams();
+    if (query.trim()) search.set('q', query.trim());
+    if (status) search.set('status', status);
+    const suffix = search.toString() ? `?${search}` : '';
+    return this.api<{ issues: ProjectIssue[]; closeWithoutReview: ReviewLevel }>(`/api/projects/${id}/issues${suffix}`);
+  }
+  // Reads one issue with its history.
+  async issue(id: string, number: number) { return (await this.api<{ issue: ProjectIssue }>(`/api/projects/${id}/issues/${number}`)).issue; }
+  // The user's changes to one issue: a note, its owner (an agent id, 'main', or null), closing, reopening, severity.
+  commentIssue(id: string, number: number, text: string) { return this.api(`/api/projects/${id}/issues/${number}/comment`, { text }); }
+  assignIssue(id: string, number: number, owner: string | null) { return this.api(`/api/projects/${id}/issues/${number}/owner`, { owner }); }
+  closeIssue(id: string, number: number) { return this.api(`/api/projects/${id}/issues/${number}/close`, {}); }
+  reopenIssue(id: string, number: number) { return this.api(`/api/projects/${id}/issues/${number}/reopen`, {}); }
+  setIssueSeverity(id: string, number: number, severity: IssueSeverity) {
+    return this.api(`/api/projects/${id}/issues/${number}/severity`, { severity });
+  }
+  // Reads and saves the highest severity agents may close without the user's review.
+  async reviewLevel(id: string) { return (await this.api<{ closeWithoutReview: ReviewLevel }>(`/api/projects/${id}/issue-settings`)).closeWithoutReview; }
+  saveReviewLevel(id: string, level: ReviewLevel) { return this.api(`/api/projects/${id}/issue-settings`, { closeWithoutReview: level }); }
 
   // Names the instruction files found in a project's folder, for its settings.
   rules(id: string) {

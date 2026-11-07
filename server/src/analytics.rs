@@ -231,9 +231,337 @@ impl Store {
     }
 }
 
+/// How many recent events each agent's tile lists.
+const RECENT: usize = 3;
+
+/// One agent's figures while they are being gathered. The main agent is the empty name.
+#[derive(Default)]
+struct AgentFigures {
+    id: Option<String>,
+    turns: i64, tokens: i64, input: i64, output: i64, seconds: f64, average_seconds: f64,
+    completed: i64, interrupted: i64, failed_turns: i64, last_turn: Option<(i64, String)>,
+    runs: i64, done: i64, failed_runs: i64, cancelled: i64, declined: i64, running: i64,
+    average_run_ms: Option<f64>, running_since: Option<i64>, last_run: Option<(i64, String)>,
+    recent: Vec<(i64, Value)>,
+}
+
+/// Reads each agent's figures since `from`: its responses (turns) and the tasks delegated to it,
+/// whether it is running now and since when, and what it did last. `now` is the reading's time.
+fn agent_report(db: &Connection, from: i64, now: i64) -> Result<Vec<Value>, Issue> {
+    use std::collections::BTreeMap;
+    let mut agents: BTreeMap<String, AgentFigures> = BTreeMap::new();
+
+    // Responses, with the status the provider ended them with: `completed`, `interrupted` or `failed`.
+    let mut query = db.prepare("SELECT coalesce(agent, ''), count(*), coalesce(sum(total_tokens), 0),
+            coalesce(sum(input_tokens), 0), coalesce(sum(output_tokens), 0), coalesce(sum(seconds), 0.0),
+            coalesce(avg(CASE WHEN status = 'completed' THEN seconds END), 0.0),
+            sum(status = 'completed'), sum(status = 'interrupted'), sum(status = 'failed')
+        FROM usage_turns WHERE at >= ?1 GROUP BY 1").map_err(Issue::storage)?;
+    let rows = query.query_map([from], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?,
+        row.get::<_, i64>(3)?, row.get::<_, i64>(4)?, row.get::<_, f64>(5)?, row.get::<_, f64>(6)?,
+        row.get::<_, i64>(7)?, row.get::<_, i64>(8)?, row.get::<_, i64>(9)?))).map_err(Issue::storage)?;
+    for row in rows {
+        let (name, turns, tokens, input, output, seconds, average, completed, interrupted, failed) = row.map_err(Issue::storage)?;
+        let agent = agents.entry(name).or_default();
+        (agent.turns, agent.tokens, agent.input, agent.output, agent.seconds, agent.average_seconds) = (turns, tokens, input, output, seconds, average);
+        (agent.completed, agent.interrupted, agent.failed_turns) = (completed, interrupted, failed);
+    }
+
+    // Delegated tasks. A run still going is counted however long ago it started.
+    let mut query = db.prepare("SELECT agent, max(agent_id), count(*), sum(status = 'done'), sum(status = 'failed'),
+            sum(status = 'cancelled'), sum(status = 'declined'), sum(status IN ('asking', 'running')),
+            avg(CASE WHEN status = 'done' AND ended IS NOT NULL THEN ended - started END),
+            min(CASE WHEN status IN ('asking', 'running') THEN started END)
+        FROM delegated_runs WHERE started >= ?1 OR status IN ('asking', 'running') GROUP BY 1").map_err(Issue::storage)?;
+    let rows = query.query_map([from], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, i64>(2)?,
+        row.get::<_, i64>(3)?, row.get::<_, i64>(4)?, row.get::<_, i64>(5)?, row.get::<_, i64>(6)?, row.get::<_, i64>(7)?,
+        row.get::<_, Option<f64>>(8)?, row.get::<_, Option<i64>>(9)?))).map_err(Issue::storage)?;
+    for row in rows {
+        let (name, id, runs, done, failed, cancelled, declined, running, average, since) = row.map_err(Issue::storage)?;
+        let agent = agents.entry(name).or_default();
+        agent.id = id;
+        (agent.runs, agent.done, agent.failed_runs, agent.cancelled, agent.declined, agent.running) = (runs, done, failed, cancelled, declined, running);
+        (agent.average_run_ms, agent.running_since) = (average, since);
+    }
+
+    // The latest responses and tasks of each agent, for its activity list and its health.
+    let mut query = db.prepare("SELECT name, at, status, seconds, total_tokens FROM (
+            SELECT coalesce(agent, '') AS name, at, status, seconds, total_tokens,
+                row_number() OVER (PARTITION BY coalesce(agent, '') ORDER BY at DESC) AS n
+            FROM usage_turns WHERE at >= ?1) WHERE n <= ?2").map_err(Issue::storage)?;
+    let rows = query.query_map(params![from, RECENT as i64], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?,
+        row.get::<_, String>(2)?, row.get::<_, f64>(3)?, row.get::<_, i64>(4)?))).map_err(Issue::storage)?;
+    for row in rows {
+        let (name, at, status, seconds, tokens) = row.map_err(Issue::storage)?;
+        let agent = agents.entry(name).or_default();
+        if agent.last_turn.as_ref().is_none_or(|(last, _)| at > *last) { agent.last_turn = Some((at, status.clone())); }
+        agent.recent.push((at, json!({ "kind": "response", "at": at, "status": status, "seconds": seconds, "tokens": tokens })));
+    }
+    // A run's line is its one-line summary, which its card already shows; an older run without one
+    // shows the start of its task.
+    let mut query = db.prepare("SELECT name, started, ended, status, label FROM (
+            SELECT agent AS name, started, ended, status,
+                CASE WHEN summary <> '' THEN summary ELSE substr(task, 1, 120) END AS label,
+                row_number() OVER (PARTITION BY agent ORDER BY started DESC) AS n
+            FROM delegated_runs WHERE started >= ?1 OR status IN ('asking', 'running')) WHERE n <= ?2").map_err(Issue::storage)?;
+    let rows = query.query_map(params![from, RECENT as i64], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?,
+        row.get::<_, Option<i64>>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?))).map_err(Issue::storage)?;
+    for row in rows {
+        let (name, started, ended, status, label) = row.map_err(Issue::storage)?;
+        let agent = agents.entry(name).or_default();
+        let at = ended.unwrap_or(started);
+        if agent.last_run.as_ref().is_none_or(|(last, _)| at > *last) { agent.last_run = Some((at, status.clone())); }
+        agent.recent.push((at, json!({ "kind": "task", "at": at, "started": started, "ended": ended, "status": status, "summary": label })));
+    }
+
+    // Delegations in progress, both ways round: the agent whose conversation asked (its name pinned in
+    // `agent_chats`; the main agent's conversations have no row) and the agent doing the work.
+    let mut delegating: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    let mut working_for: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut query = db.prepare("SELECT coalesce(json_extract(chats.definition, '$.name'), ''), runs.agent, runs.status,
+            runs.started, runs.mode, CASE WHEN runs.summary <> '' THEN runs.summary ELSE substr(runs.task, 1, 120) END
+        FROM delegated_runs runs LEFT JOIN agent_chats chats ON chats.thread_id = runs.parent
+        WHERE runs.status IN ('asking', 'running') ORDER BY runs.started").map_err(Issue::storage)?;
+    let rows = query.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?,
+        row.get::<_, i64>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?))).map_err(Issue::storage)?;
+    for row in rows {
+        let (from, to, status, started, mode, summary) = row.map_err(Issue::storage)?;
+        agents.entry(from.clone()).or_default();
+        agents.entry(to.clone()).or_default();
+        delegating.entry(from.clone()).or_default().push(json!({ "agent": to, "status": status, "started": started,
+            "mode": mode, "summary": summary }));
+        let names = working_for.entry(to).or_default();
+        if !names.contains(&from) { names.push(from); }
+    }
+
+    let all_turns: i64 = agents.values().map(|agent| agent.turns).sum();
+    let all_runs: i64 = agents.values().map(|agent| agent.runs).sum();
+    Ok(agents.into_iter().map(|(name, mut agent)| {
+        // Running beats everything; otherwise the agent is as healthy as the last thing it did.
+        let last = match (&agent.last_turn, &agent.last_run) {
+            (Some(turn), Some(run)) => Some(if run.0 >= turn.0 { run.1.as_str() } else { turn.1.as_str() }),
+            (Some(turn), None) => Some(turn.1.as_str()),
+            (None, Some(run)) => Some(run.1.as_str()),
+            (None, None) => None,
+        };
+        let state = if agent.running > 0 { "running" } else { match last {
+            Some("failed") => "failed",
+            Some("interrupted" | "cancelled" | "declined") => "stopped",
+            Some(_) => "healthy",
+            None => "idle",
+        } };
+        let delegating_to = delegating.remove(&name).unwrap_or_default();
+        let works_for = working_for.remove(&name).unwrap_or_default();
+        agent.recent.sort_by(|a, b| b.0.cmp(&a.0));
+        agent.recent.truncate(RECENT);
+        let last_active = agent.recent.first().map(|(at, _)| *at);
+        let share = |part: i64, whole: i64| if whole > 0 { part as f64 / whole as f64 } else { 0.0 };
+        json!({
+            "name": name, "main": name.is_empty(), "id": agent.id, "state": state, "lastActive": last_active,
+            "runningSince": agent.running_since,
+            "runningMs": agent.running_since.map(|since| (now - since).max(0)),
+            "responses": { "count": agent.turns, "completed": agent.completed, "interrupted": agent.interrupted,
+                "failed": agent.failed_turns, "averageSeconds": agent.average_seconds, "busySeconds": agent.seconds,
+                "share": share(agent.turns, all_turns) },
+            "tokens": { "total": agent.tokens, "input": agent.input, "output": agent.output,
+                "perResponse": if agent.turns > 0 { agent.tokens / agent.turns } else { 0 } },
+            "tasks": { "count": agent.runs, "done": agent.done, "failed": agent.failed_runs, "cancelled": agent.cancelled,
+                "declined": agent.declined, "running": agent.running,
+                "averageSeconds": agent.average_run_ms.map(|ms| ms / 1000.0), "share": share(agent.runs, all_runs) },
+            "recent": agent.recent.into_iter().map(|(_, event)| event).collect::<Vec<_>>(),
+            "delegatingTo": delegating_to, "workingFor": works_for,
+        })
+    }).collect())
+}
+
+/// How many blocks the timeline splits a range into: an hour each for a day, a day each for a month.
+fn blocks_for(days: i64) -> i64 {
+    match days { 1 => 24, 2..=7 => 42, 8..=30 => 30, 31..=90 => 45, _ => 52 }
+}
+
+/// One block of one agent's timeline: working time that finished, was stopped, or failed, in ms, and how
+/// many failures (a failed response, or a delegated task that failed or was cancelled) ended in it.
+#[derive(Clone, Copy, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Block { ok: i64, stopped: i64, failed: i64, failures: i64 }
+
+/// Each agent's working time across the range in equal blocks, so stops and failures show where they
+/// happened, and the part of its working time that did not finish (its downtime).
+///
+/// Time comes from responses: a response that ran from `at - seconds` to `at` adds its time to every block
+/// it overlaps. A delegated task's own work is its agent's responses, so its time is not counted twice; a
+/// failed or cancelled task only marks the block it ended in.
+fn timeline(db: &Connection, from: i64, now: i64, days: i64) -> Result<Value, Issue> {
+    use std::collections::BTreeMap;
+    let count = blocks_for(days);
+    let width = ((now - from) / count).max(1);
+    let mut agents: BTreeMap<String, Vec<Block>> = BTreeMap::new();
+    let index = |at: i64| ((at - from) / width).clamp(0, count - 1) as usize;
+
+    let mut query = db.prepare("SELECT coalesce(agent, ''), at, seconds, status FROM usage_turns WHERE at >= ?1")
+        .map_err(Issue::storage)?;
+    let rows = query.query_map([from], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?,
+        row.get::<_, f64>(2)?, row.get::<_, String>(3)?))).map_err(Issue::storage)?;
+    for row in rows {
+        let (name, end, seconds, status) = row.map_err(Issue::storage)?;
+        let blocks = agents.entry(name).or_insert_with(|| vec![Block::default(); count as usize]);
+        let start = (end - (seconds * 1000.0) as i64).max(from);
+        for slot in index(start)..=index(end) {
+            let (block_start, block_end) = (from + slot as i64 * width, from + (slot as i64 + 1) * width);
+            let part = (end.min(block_end) - start.max(block_start)).max(0);
+            let block = &mut blocks[slot];
+            match status.as_str() {
+                "completed" => block.ok += part,
+                "failed" => block.failed += part,
+                _ => block.stopped += part,
+            }
+        }
+        if status == "failed" { blocks[index(end)].failures += 1; }
+    }
+    let mut query = db.prepare("SELECT agent, ended FROM delegated_runs
+        WHERE status IN ('failed', 'cancelled') AND ended IS NOT NULL AND ended >= ?1").map_err(Issue::storage)?;
+    let rows = query.query_map([from], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))).map_err(Issue::storage)?;
+    for row in rows {
+        let (name, ended) = row.map_err(Issue::storage)?;
+        agents.entry(name).or_insert_with(|| vec![Block::default(); count as usize])[index(ended)].failures += 1;
+    }
+
+    let rows: Vec<Value> = agents.into_iter().map(|(name, blocks)| {
+        let (ok, stopped, failed) = blocks.iter().fold((0, 0, 0), |sum, block| (sum.0 + block.ok, sum.1 + block.stopped, sum.2 + block.failed));
+        let total = ok + stopped + failed;
+        json!({ "name": name, "okMs": ok, "stoppedMs": stopped, "failedMs": failed,
+            "downtime": if total > 0 { (stopped + failed) as f64 / total as f64 } else { 0.0 },
+            "failures": blocks.iter().map(|block| block.failures).sum::<i64>(), "blocks": blocks })
+    }).collect();
+    Ok(json!({ "from": from, "to": now, "width": width, "count": count, "agents": rows }))
+}
+
+impl Store {
+    /// Returns each agent's figures for the Agents page: averages, tokens, health and recent activity.
+    pub async fn agent_analytics(&self, days: i64) -> Result<Value, Issue> {
+        self.run(move |db| {
+            let (from, now) = (since(days), chrono::Utc::now().timestamp_millis());
+            Ok(json!({ "days": days, "from": from, "now": now, "agents": agent_report(db, from, now)?,
+                "timeline": timeline(db, from, now, days)? }))
+        }).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn database() -> Connection {
+        let db = Connection::open_in_memory().unwrap();
+        migrate(&db).unwrap();
+        crate::delegations::migrate(&db).unwrap();
+        // The part of the agent store the report reads: which agent a conversation belongs to.
+        db.execute_batch("CREATE TABLE agent_chats (thread_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, definition TEXT NOT NULL);")
+            .unwrap();
+        db
+    }
+
+    #[test]
+    fn the_timeline_spreads_time_over_blocks_and_measures_downtime() {
+        let db = database();
+        // A day split into 24 one-hour blocks, starting at 0.
+        let hour = 3_600_000;
+        // 30 minutes that finished, ending half way through the second hour...
+        turn(&db, "1", hour + hour / 2, None, "completed", 1_800.0, 10);
+        // ...and 2 hours that failed, ending at the start of the sixth hour: it covers the fourth and fifth.
+        turn(&db, "2", 5 * hour, None, "failed", 7_200.0, 10);
+        // 30 minutes stopped, inside the eleventh hour.
+        turn(&db, "3", 10 * hour + hour / 2, None, "interrupted", 1_800.0, 10);
+        run(&db, "r1", "Tester", "cancelled", 0, Some(2 * hour + 1));
+        let line = timeline(&db, 0, 24 * hour, 1).unwrap();
+        assert_eq!(line["count"], 24);
+        let main = line["agents"].as_array().unwrap().iter().find(|row| row["name"] == "").unwrap();
+        assert_eq!(main["blocks"][1]["ok"], hour / 2);
+        assert_eq!(main["blocks"][3]["failed"], hour);
+        assert_eq!(main["blocks"][4]["failed"], hour);
+        assert_eq!(main["blocks"][4]["failures"], 0, "a failure is marked where it ended");
+        assert_eq!(main["blocks"][5]["failures"], 1);
+        assert_eq!(main["blocks"][10]["stopped"], hour / 2);
+        // 2.5 hours of 3 did not finish.
+        assert!((main["downtime"].as_f64().unwrap() - 2.5 / 3.0).abs() < 1e-9);
+        let tester = line["agents"].as_array().unwrap().iter().find(|row| row["name"] == "Tester").unwrap();
+        assert_eq!(tester["blocks"][2]["failures"], 1);
+        assert_eq!(tester["downtime"], 0.0);
+    }
+
+    #[test]
+    fn a_delegation_in_progress_tags_both_agents() {
+        let db = database();
+        // The Writer's conversation `w` hands work to the Builder; the main agent's `p` hands work to the Tester.
+        db.execute("INSERT INTO agent_chats VALUES ('w', 'a-2', '{\"name\":\"Writer\"}')", []).unwrap();
+        turn(&db, "1", 1_000, Some("Writer"), "interrupted", 2.0, 10);
+        db.execute("INSERT INTO delegated_runs (id, parent, turn_id, call_id, agent_id, agent, task, status, started, summary)
+            VALUES ('r1', 'w', 'u', 'c1', 'a-1', 'Builder', 'Build it', 'running', 5000, 'Build the page')", []).unwrap();
+        run(&db, "r2", "Tester", "running", 6_000, None);
+        run(&db, "r3", "Tester", "done", 1_000, Some(2_000));
+        let agents = agent_report(&db, 0, 10_000).unwrap();
+        let find = |name: &str| agents.iter().find(|agent| agent["name"] == name).unwrap().clone();
+
+        let writer = find("Writer");
+        // Stopped, and delegating as well: the two tags are independent.
+        assert_eq!(writer["state"], "stopped");
+        assert_eq!(writer["delegatingTo"][0]["agent"], "Builder");
+        assert_eq!(writer["delegatingTo"][0]["summary"], "Build the page");
+        assert_eq!(find("Builder")["workingFor"], json!(["Writer"]));
+        assert_eq!(find("")["delegatingTo"][0]["agent"], "Tester");
+        assert_eq!(find("Tester")["workingFor"], json!([""]));
+        // A finished run is no longer a delegation in progress.
+        assert_eq!(find("Tester")["delegatingTo"], json!([]));
+    }
+
+    fn turn(db: &Connection, id: &str, at: i64, agent: Option<&str>, status: &str, seconds: f64, tokens: i64) {
+        db.execute("INSERT INTO usage_turns (thread_id, turn_id, at, provider, agent, status, seconds, total_tokens)
+            VALUES ('t', ?1, ?2, 'codex', ?3, ?4, ?5, ?6)", params![id, at, agent, status, seconds, tokens]).unwrap();
+    }
+
+    fn run(db: &Connection, id: &str, agent: &str, status: &str, started: i64, ended: Option<i64>) {
+        db.execute("INSERT INTO delegated_runs (id, parent, turn_id, call_id, agent_id, agent, task, status, started, ended, summary)
+            VALUES (?1, 'p', 'u', ?1, 'a-1', ?2, 'Write the tests', ?3, ?4, ?5, 'Tests')",
+            params![id, agent, status, started, ended]).unwrap();
+    }
+
+    #[test]
+    fn each_agent_gets_its_averages_share_and_health() {
+        let db = database();
+        turn(&db, "1", 1_000, None, "completed", 4.0, 100);
+        turn(&db, "2", 2_000, None, "completed", 6.0, 300);
+        turn(&db, "3", 3_000, Some("Tester"), "completed", 10.0, 600);
+        turn(&db, "4", 4_000, Some("Tester"), "interrupted", 1.0, 0);
+        run(&db, "r1", "Tester", "done", 1_000, Some(61_000));
+        let agents = agent_report(&db, 0, 100_000).unwrap();
+        let main = agents.iter().find(|agent| agent["main"] == true).unwrap();
+        let tester = agents.iter().find(|agent| agent["name"] == "Tester").unwrap();
+
+        assert_eq!(main["responses"]["averageSeconds"], 5.0);
+        assert_eq!(main["tokens"]["total"], 400);
+        assert_eq!(main["responses"]["share"], 0.5);
+        assert_eq!(main["state"], "healthy");
+        // The interrupted response is not part of the average, and the finished task ended last.
+        assert_eq!(tester["responses"]["averageSeconds"], 10.0);
+        assert_eq!(tester["tasks"]["averageSeconds"], 60.0);
+        assert_eq!(tester["tasks"]["share"], 1.0);
+        assert_eq!(tester["state"], "healthy");
+        assert_eq!(tester["recent"][0]["kind"], "task");
+    }
+
+    #[test]
+    fn a_running_task_wins_and_a_stop_shows() {
+        let db = database();
+        turn(&db, "1", 5_000, Some("Writer"), "interrupted", 2.0, 10);
+        turn(&db, "2", 5_000, Some("Builder"), "completed", 2.0, 10);
+        run(&db, "r1", "Builder", "running", 8_000, None);
+        let agents = agent_report(&db, 0, 20_000).unwrap();
+        let writer = agents.iter().find(|agent| agent["name"] == "Writer").unwrap();
+        let builder = agents.iter().find(|agent| agent["name"] == "Builder").unwrap();
+        assert_eq!(writer["state"], "stopped");
+        assert_eq!(builder["state"], "running");
+        assert_eq!(builder["runningMs"], 12_000);
+    }
 
     #[test]
     fn a_range_starts_at_a_days_boundary_and_covers_it() {

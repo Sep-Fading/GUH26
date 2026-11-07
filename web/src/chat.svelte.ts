@@ -979,6 +979,22 @@ export class Chat {
   analytics<T>(days: number) {
     return this.api<T>(`/api/analytics?days=${days}`);
   }
+  // Each agent's figures for the Agents page.
+  agentAnalytics<T>(days: number) {
+    return this.api<T>(`/api/analytics/agents?days=${days}`);
+  }
+  // The responses running right now, in every conversation, with their agents.
+  activeTurns<T>() {
+    return this.api<{ active: T[]; swarms?: import('./agent-stats').LiveSwarm[] }>('/api/active-turns');
+  }
+  // Cuts or restores one swarm agent's link to the issues; a restored agent replays what it queued.
+  swarmLink(swarm: string, agent: string, up: boolean) {
+    return this.api<Record<string, unknown>>(`/api/swarms/${swarm}/link`, { agent, up });
+  }
+  // Stops one running response of any conversation, the way Stop does for the open one.
+  interruptTurn(threadId: string, turnId: string) {
+    return this.api<Record<string, never>>(`/api/threads/${threadId}/interrupt`, { turnId });
+  }
 
   // MCP servers: reads the list or `sources?provider=`, or posts to `servers`, `servers/<id>`, `import`.
   mcp<T>(action: string, body?: unknown) {

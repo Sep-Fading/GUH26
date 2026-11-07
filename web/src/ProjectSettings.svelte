@@ -6,6 +6,8 @@
   import Instructions from './Instructions.svelte';
   // Lists and edits the notes the project's conversations share.
   import ProjectMemory from './ProjectMemory.svelte';
+  // Chooses which issues agents may close alone.
+  import IssueSettings from './IssueSettings.svelte';
   import { Input } from '$lib/components/ui/input/index.js';
   // Styled button from the shared component library.
   import { Button } from '$lib/components/ui/button/index.js';
@@ -359,6 +361,8 @@
           label="MiniClaw skill groups" disabled={chat.projects.saving || setupRunning} onchange={() => saved = false} />
         <!-- Notes belong to a saved project; they are changed at once, not with Save. -->
         {#if id}<ProjectMemory projects={chat.projects} {id} />{/if}
+        <!-- The review level is also saved at once. -->
+        {#if id}<IssueSettings projects={chat.projects} {id} />{/if}
         {#if project && machineLocked && project.environment?.kind === 'vm'
           && project.environment.dedicated && project.environment.vmId}
           <VmControls {chat} vmId={project.environment.vmId} name="Project VM" />

@@ -18,9 +18,20 @@ pub const TOOL: &str = "miniclaw_project";
 /// Describes the tool to a provider. `type` is required by the real Codex.
 pub fn tool_definition() -> Value {
     json!({ "type": "function", "name": TOOL,
-        "description": "Reads and writes what this project's conversations share. Memory is a set of short notes every conversation of the project can read; you are told their names and descriptions once, and read a note's text with memory_read only when it matters for the task. Save a note with memory_save when you learn something a later conversation will need and could not find out quickly by itself: a decision and its reason, a preference of the user, a convention, where something lives, a pitfall. One subject per note, a name of a few words, a description of one sentence that says when the note is worth reading, and text of a few lines. Saving under an existing name replaces that note, so update a note instead of adding a near-duplicate, and delete one that turned out wrong. Never save secrets, things the project's files already say, or what only matters to this conversation. Earlier conversations: when you finish a piece of work a later conversation may build on, call summary_save once with what was done, what was decided and what is left, in at most 600 characters; not after every message. conversations_list names the project's other conversations, conversations_search finds the messages that hold all of your words, in any order, and returns short passages, and conversation_read returns one 8 KB page of one. Look one up only when the task builds on it.",
+        "description": "Reads and writes what this project's conversations share. Memory is a set of short notes every conversation of the project can read; you are told their names and descriptions once, and read a note's text with memory_read only when it matters for the task. Save a note with memory_save when you learn something a later conversation will need and could not find out quickly by itself: a decision and its reason, a preference of the user, a convention, where something lives, a pitfall. One subject per note, a name of a few words, a description of one sentence that says when the note is worth reading, and text of a few lines. Saving under an existing name replaces that note, so update a note instead of adding a near-duplicate, and delete one that turned out wrong. Never save secrets, things the project's files already say, or what only matters to this conversation. Earlier conversations: when you finish a piece of work a later conversation may build on, call summary_save once with what was done, what was decided and what is left, in at most 600 characters; not after every message. conversations_list names the project's other conversations, conversations_search finds the messages that hold all of your words, in any order, and returns short passages, and conversation_read returns one 8 KB page of one. Look one up only when the task builds on it. Issues are the project's known bugs and features. A bug you will not fix now: issue_list, then issue_create. issue_claim before working (moves it to dev); one agent owns an issue, and only it may issue_stage it (dev, qa, agent_review), issue_done it (a summary; closes it or leaves it for the user's review by severity) or issue_release it (a handover: found, done, left). issue_severity only raises; issue_comment adds to the history issue_read shows. A swarm's Lead also has issue_assign (a story to an agent, by name) and issue_review_level, used when the user asks.",
         "inputSchema": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": {
-            "action": { "type": "string", "enum": ["memory_read", "memory_save", "memory_delete", "summary_save", "conversations_list", "conversations_search", "conversation_read"] },
+            "action": { "type": "string", "enum": ["memory_read", "memory_save", "memory_delete", "summary_save", "conversations_list", "conversations_search", "conversation_read",
+                "issue_list", "issue_read", "issue_create", "issue_comment", "issue_claim", "issue_release", "issue_done", "issue_severity", "issue_stage",
+                "issue_assign", "issue_review_level"] },
+            "agent": { "type": "string", "description": "issue_assign: the agent, e.g. Dev-2." },
+            "level": { "type": "string", "enum": ["none", "low", "medium", "high"], "description": "issue_review_level: highest severity agents close alone." },
+            "stage": { "type": "string", "enum": ["dev", "qa", "agent_review"] },
+            "issue": { "type": "integer", "description": "The issue's number." },
+            "kind": { "type": "string", "enum": ["bug", "feature"] },
+            "title": { "type": "string", "description": "issue_create: one line, at most 120 characters." },
+            "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+            "tags": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+            "status": { "type": "string", "enum": ["backlog", "dev", "qa", "agent_review", "review", "closed"], "description": "issue_list: only this stage; review is the user's." },
             "name": { "type": "string", "description": "The note's name, at most 80 characters." },
             "description": { "type": "string", "description": "memory_save: one sentence, at most 200 characters, saying when the note is worth reading." },
             "text": { "type": "string", "description": "memory_save: the note itself, at most 8 KB. summary_save: the summary, at most 600 characters." },
@@ -98,6 +109,8 @@ async fn run(backend: &Backend, thread: &str, arguments: &Value) -> (&'static st
     let Some(project) = project_of(backend, thread).await else {
         return refused("Project memory".into(), "This conversation is not in a project, so it has no shared memory.");
     };
+    // Issues are the project's record of work, so the memory switch leaves them on.
+    if action.starts_with("issue_") { return crate::issue_tool::run(backend, thread, project, action, arguments).await; }
     if switched_off(backend, thread).await {
         return refused("Project memory".into(), "Project memory is switched off for this conversation. The user can switch it on from Tools beside the message box.");
     }
@@ -181,7 +194,9 @@ pub async fn handle(backend: Arc<Backend>, request: crate::rpc::ServerRequest) {
     let (status, title, output, answer) = run(&backend, &thread, &params["arguments"]).await;
     if let (Some(id), Some(turn)) = (params["callId"].as_str(), params["turnId"].as_str()) {
         let agent = backend.data.lock().await.chats.get(&thread).and_then(|chat| chat.summary["agentName"].as_str().map(str::to_owned));
-        backend.publish_activity(&thread, &json!({ "id": id, "turnId": turn, "kind": "memory", "title": title, "detail": null, "agent": agent,
+        // Issue calls get their own row kind; everything else reads as project memory.
+        let kind = if params["arguments"]["action"].as_str().is_some_and(|action| action.starts_with("issue_")) { "issue" } else { "memory" };
+        backend.publish_activity(&thread, &json!({ "id": id, "turnId": turn, "kind": kind, "title": title, "detail": null, "agent": agent,
             "status": status, "startedAt": started, "endedAt": chrono::Utc::now().timestamp_millis().max(started + 1), "output": output })).await;
     }
     let _ = request.answer.send(answer);
@@ -192,11 +207,13 @@ mod tests {
     use super::*;
 
     /// The schema travels with every request of a project conversation, so its size is a budget.
+    /// Raised from 3200 to 3600 bytes on 2026-11-07, when the tool gained the issue actions, and to 4000
+    /// the same day for a swarm Lead's issue_assign and issue_review_level.
     #[test]
     fn the_tool_stays_small() {
         let size = tool_definition().to_string().len();
         println!("miniclaw_project definition: {size} bytes");
-        assert!(size <= 3200, "{size} bytes");
+        assert!(size <= 4000, "{size} bytes");
     }
 
     #[test]

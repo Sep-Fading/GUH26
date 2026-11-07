@@ -24,3 +24,12 @@ describe('a refused call', () => {
     expect(screen.queryByRole('note')).toBeNull();
   });
 });
+
+describe('an issue call', () => {
+  test('reads as its own title, without a verb and not as code', () => {
+    render(ActivityList, { entries: [{ id: 'c', turnId: 't', kind: 'issue', title: 'Filed #3: Queue paused', status: 'ok', startedAt: 1, endedAt: 2 }] });
+    const row = screen.getByRole('button', { name: /Filed #3: Queue paused/ });
+    expect(row.textContent).not.toMatch(/Did/);
+    expect(screen.getByText('Filed #3: Queue paused').classList.contains('font-mono')).toBe(false);
+  });
+});

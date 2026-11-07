@@ -41,6 +41,10 @@ type Body<T> = std::result::Result<Json<T>, JsonRejection>;
 mod delegation;
 // Swarms: many agents, one goal, a shared ledger that survives broken links.
 mod swarm;
+/// The issue actor of a swarm agent's conversation, for the issue tool.
+pub use swarm::actor as swarm_actor;
+/// A swarm Lead's own issue actions, for the issue tool.
+pub use swarm::lead_action as swarm_lead_action;
 mod schedules;
 mod mcp;
 mod queue;
@@ -48,6 +52,7 @@ mod capabilities;
 mod ask;
 mod attachments;
 mod project_memory;
+mod issues;
 mod terminal;
 mod workspace;
 mod search;
@@ -306,6 +311,15 @@ pub fn router_at(backend: Shared, assets: &std::path::Path) -> Router {
         .route("/api/projects/{id}/memory", get(project_memory::list).post(project_memory::add))
         .route("/api/projects/{id}/memory/{name}", post(project_memory::edit))
         .route("/api/projects/{id}/memory/{name}/delete", post(project_memory::remove))
+        .route("/api/projects/{id}/issues", get(issues::list))
+        .route("/api/projects/{id}/issues/live", get(issues::stream))
+        .route("/api/projects/{id}/issues/{number}", get(issues::read))
+        .route("/api/projects/{id}/issues/{number}/comment", post(issues::comment))
+        .route("/api/projects/{id}/issues/{number}/owner", post(issues::owner))
+        .route("/api/projects/{id}/issues/{number}/close", post(issues::close))
+        .route("/api/projects/{id}/issues/{number}/reopen", post(issues::reopen))
+        .route("/api/projects/{id}/issues/{number}/severity", post(issues::severity))
+        .route("/api/projects/{id}/issue-settings", get(issues::settings).post(issues::save_settings))
         .route("/api/permissions/{kind}/{id}",
             get(permission_settings).post(change_permission))
         .route("/api/permissions/{kind}/{id}/app-requests",
@@ -356,11 +370,13 @@ pub fn router_at(backend: Shared, assets: &std::path::Path) -> Router {
         .route("/api/threads/{id}/workspace/discard", post(workspace::discard))
         .route("/api/threads/{id}/delegations/{run}", post(delegation::answer))
         .route("/api/delegations/{run}/detach", post(delegation::detach))
+        .route("/api/delegation/auto", get(delegation::auto_view).post(delegation::auto_save))
         .route("/api/swarms", get(swarm::list).post(swarm::start))
         .route("/api/swarms/{id}", get(swarm::view))
         .route("/api/swarms/{id}/link", post(swarm::link))
         .route("/api/swarms/{id}/tasks", post(swarm::add))
         .route("/api/swarms/{id}/stop", post(swarm::stop))
+        .route("/api/swarms/{id}/delete", post(swarm::delete))
         .route("/api/threads/{id}/questions/{question}", post(ask::answer))
         .route("/api/threads/{id}/queue", get(queue::list).post(queue::add))
         .route("/api/threads/{id}/queue/clear", post(queue::clear))
@@ -395,6 +411,8 @@ pub fn router_at(backend: Shared, assets: &std::path::Path) -> Router {
         .route("/api/auth/code", post(login_code))
         .route("/api/usage", get(usage::read))
         .route("/api/analytics", get(analytics))
+        .route("/api/analytics/agents", get(agent_analytics))
+        .route("/api/active-turns", get(active))
         .route("/api/threads", get(tasks).post(create))
         .route("/api/threads/working", get(working_tasks))
         .route("/api/search", get(search::search))
@@ -2054,8 +2072,13 @@ async fn environment_note(backend: &Backend, id: &str) -> Option<String> {
             None => crate::chat_folder::root().map(|root| crate::briefing::OwnFolder::Later(root.to_string_lossy().into_owned())),
         }
     } else { None };
-    Some(crate::briefing::state(&crate::briefing::State { machine, agent: summary["agentName"].as_str().map(str::to_owned),
-        project: summary["projectName"].as_str().map(str::to_owned), capabilities, servers, delegates, limits, own_folder }))
+    let mut note = crate::briefing::state(&crate::briefing::State { machine, agent: summary["agentName"].as_str().map(str::to_owned),
+        project: summary["projectName"].as_str().map(str::to_owned), capabilities, servers, delegates, limits, own_folder });
+    // What this project lets an agent close without the user; it changes only when the user changes it.
+    if let Some(project) = context.project() && let Ok(level) = backend.agents.review_level(project).await {
+        note.push_str(&format!("- Issues: {}\n", crate::issues::level_sentence(&level)));
+    }
+    Some(note)
 }
 
 /// Offers the native tool on the host or a routed VM. Dispatch still requires a binding
@@ -4495,6 +4518,41 @@ async fn analytics(State(backend): State<Shared>,
         None => 30,
     };
     Ok(Json(backend.agents.analytics(days).await?))
+}
+
+/// Returns each agent's figures over a range of days, for the Agents page.
+async fn agent_analytics(State(backend): State<Shared>,
+    query: std::result::Result<Query<Range>, axum::extract::rejection::QueryRejection>) -> Result<Json<Value>> {
+    authorized(&backend).await?;
+    let Query(range) = query.map_err(|_| invalid())?;
+    let days: i64 = match range.days {
+        Some(text) => text.parse().ok().filter(|days| (1..=crate::analytics::MOST_DAYS).contains(days)).ok_or_else(invalid)?,
+        None => 30,
+    };
+    let mut report = backend.agents.agent_analytics(days).await?;
+    report["active"] = active_turns(&backend).await;
+    Ok(Json(report))
+}
+
+/// Lists the responses running right now, for the chat view's running-agents box. Cheap: it reads
+/// only what is in memory, so the page can ask every few seconds.
+async fn active(State(backend): State<Shared>) -> Result<Json<Value>> {
+    authorized(&backend).await?;
+    Ok(Json(json!({ "active": active_turns(&backend).await, "swarms": swarm::live(&backend).await })))
+}
+
+/// Every response running right now, with its agent, so the Agents page can show it and stop it
+/// through the ordinary interrupt route. The main agent is the empty name, as in the figures.
+async fn active_turns(backend: &Backend) -> Value {
+    let data = backend.data.lock().await;
+    let mut turns: Vec<Value> = data.chats.iter().filter_map(|(id, chat)| chat.active.as_ref().map(|turn| json!({
+        "threadId": id, "turnId": turn,
+        "agent": chat.summary["agentName"].as_str().unwrap_or(""),
+        "conversation": chat.summary["name"].as_str().unwrap_or("Conversation"),
+        "startedAt": chat.turn_started, "stopping": chat.stopping,
+    }))).collect();
+    turns.sort_by_key(|turn| turn["startedAt"].as_i64().unwrap_or(i64::MAX));
+    json!(turns)
 }
 
 /// Lists safe notices only while the requesting account remains authorized.

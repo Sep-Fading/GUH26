@@ -71,6 +71,8 @@ pub mod names;
 pub mod speeds;
 pub mod analytics;
 pub mod project_history;
+pub mod issue_tool;
+pub mod issues;
 pub mod project_memory;
 pub mod project_tool;
 pub mod terminal;

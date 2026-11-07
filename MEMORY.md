@@ -1,5 +1,11 @@
 # Memory
 
+## Project issues and Board (2026-11-07, branch issues-board)
+
+Hackathon feature, built on WSL Linux (Rust 1.99.1 and Node 24.21.0 installed in ~/.cargo and ~/.local/node). Per-project issues (bugs/features) in agents.sqlite3 (server/src/issues.rs): one owning agent at a time; only the owner moves (issue_stage: dev, qa, agent_review), finishes (issue_done) or releases (issue_release, handover required); agents may only raise severity. Stages: backlog, dev, qa, agent_review, review (Human Review), closed. issue_done closes when severity <= the project's level (issue-settings closeWithoutReview, default low), else review until the user closes. Agent actions ride the miniclaw_project tool (server/src/issue_tool.rs; schema budget raised 3200 -> 3600 bytes); briefing line and per-message environment note ("Issues: ...") tell agents. User routes in server/src/api/issues.rs, live SSE at /api/projects/{id}/issues/live. UI: Issues and Board tabs in WorkspacePanel (IssuesPanel.svelte, BoardPanel.svelte, one live subscription via watchIssues), IssueSettings.svelte in project settings, 'issue' Activity kind. Design mockups: claude.ai artifact TohN2A13F2j8Pd8CcFfHHg.
+Checks on Linux: tests/issues.test.mjs 7/7, project-memory 5/5, web vitest 179/179, svelte-check 0 errors, cargo test --lib 236/236, web build ok, browser projects.spec 13/13. Known Linux-only failures not caused by this: briefing.test.mjs 2 (macOS line, Mac sandbox gate), claude.test.mjs safe-mode test (fails on unchanged backend too). Unverified: workspace-panel.spec.ts fails at the Changes view "+1 −1" (no-project chat; not compared against unchanged code); nothing run on Windows; file tools do not work on Linux (no sandbox). Next: build a Windows package from this branch (rustup + NASM needed on the user's x64 PC; x64 never run before), update the 0.1.7 install at C:\Users\adamm\AppData\Local\MiniClaw Install, try with a real agent.
+
+
 ## Start (2026-11-07)
 
 User asked for a minimal MiniClaw without the Roblox kit, cross-platform with Linux. Decisions:
@@ -112,3 +118,51 @@ on screen start open. While a swarm runs, the conversation list refreshes every 
 Checked: a real run (1 dev, 1 review, 1 test). The review asked for changes, the fix was made and
 then approved, 5/5 tasks were done in 1:28, and the sidebar showed the titled conversations under
 the swarm. svelte-check is clean.
+
+## Merge of the Scattz1 and ADM2005 forks, swarm on issues (2026-11-07)
+
+- **Patches:** applied as patches (`git diff origin/main <fork>`; both forks base on 0bb5e40) with
+  `patch --merge`. Conflicts were only MEMORY.md and one App.svelte line.
+- **David (Scattz1):** Agents page, timeline, running box, and the cancelled status for stopped
+  delegated runs. tests/delegation.test.mjs was updated for that requirement change (`cancelled`,
+  "stopped by the user").
+- **Adam (ADM2005, issues-board):** issues, the Board and Issues panels, the issue tool and the
+  review level.
+- **Swarm rewritten on Adam's issues** (api/swarm.rs):
+  - The lead files issues, and agents claim them by stage (dev Backlog/In Dev, test QA, review
+    Agent review). They move them with set_issue_stage and release, and a review finishes the issue.
+  - FAIL or CHANGES sends an issue back to dev; after 2 rounds or 3 failed attempts it goes to the
+    user (raised to high severity and finished).
+  - Leases, heartbeats, link cuts and replay stay in memory; an expired lease releases the issue in
+    the owner's name.
+  - Swarm agents act as themselves in the issue tool (`api::swarm_actor`) and in David's analytics
+    and running box (`summary.agentName`).
+  - The review level is chosen at launch (default medium) and beside the tabs.
+- **UI:** the chat-style progress is gone. The swarm page is launch, then Board/Issues, with
+  David's running box docked beside them, which holds the agents and the Cut/Restore controls.
+  `/api/active-turns` now also returns `swarms`.
+- **Auto delegation:** the sidebar switch and `/api/delegation/auto` (`<data>/auto-delegation.json`).
+  On means every agent may delegate to every active agent, and hand-offs start as "wait" without
+  a prompt.
+- **Checked on Linux:**
+  - Rust lib 251 tests; web 191; issues, delegation and project-memory node suites pass.
+  - A real run through the page: 2 dev, 1 review, 1 test. 2 issues were filed and went
+    Backlog → QA → Agent review → closed, and the goal was met in 1:37.
+- **Not yet:** a lease expiry exercised through issues in a real run (the link was cut after the
+  agent had finished), and macOS/Windows. Nothing is committed.
+
+Lead chat, Backlog rule, delete (2026-11-07):
+- The Lead's conversation lasts. It files stories itself through the miniclaw_project issue_create
+  action, and the user talks to it any time. Lead-only actions: issue_assign (gives a story to an
+  agent, which stays in the Backlog until that agent takes it) and issue_review_level.
+- Developers take only Backlog stories (assigned ones first); taking one moves it to In Dev.
+- Escalation uses `await_review` (Human Review whatever the level).
+- The swarm goes idle instead of ending, and resumes when new stories arrive.
+- Swarm conversations are ordinary project chats (`delegated: false`, questions off), because a
+  delegated run gets no project tool. Role rules live in the project instructions, and stories go
+  out as short messages.
+- Sidebar: Lead row, then a folded Agents group.
+- Delete: `POST /api/swarms/{id}/delete` stops the swarm and deletes the project, its conversations,
+  its issues and the saved record. The swarm folder's files are kept.
+- Checked with real models: the Lead filed 2 stories, and by chat added #3, assigned it to Dev-1 and
+  set the level to high. Delete checked through the API. Tests were cut short at the user's request.

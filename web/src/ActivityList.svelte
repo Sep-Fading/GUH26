@@ -11,6 +11,7 @@
   import Cable from '@lucide/svelte/icons/cable';
   import MessageCircleQuestion from '@lucide/svelte/icons/message-circle-question-mark';
   import Brain from '@lucide/svelte/icons/brain';
+  import CircleDot from '@lucide/svelte/icons/circle-dot';
   import LoaderCircle from '@lucide/svelte/icons/loader-circle';
   // One recorded tool call, as the backend reports it.
   import type { ToolActivity } from './chat.svelte';
@@ -20,13 +21,15 @@
   let folded = $state(false);
 
   const icons = { command: Terminal, edit: FilePen, write: FilePen, read: FileText, list: FolderOpen, search: Search, mcp: Cable,
-    question: MessageCircleQuestion, memory: Brain };
+    question: MessageCircleQuestion, memory: Brain, issue: CircleDot };
   const verbs: Record<string, string> = { command: 'Ran', edit: 'Edited', write: 'Wrote', read: 'Read',
     list: 'Listed', search: 'Searched for', mcp: 'Called', question: 'Asked',
     // A memory entry's title already says what happened: Remembered, Recalled or Forgot.
-    memory: '' };
+    memory: '',
+    // An issue entry's title says it too: Filed, Claimed, Released or Closed.
+    issue: '' };
   // A path shows its last two parts; the full path is in the tooltip and the detail.
-  const short = (entry: ToolActivity) => ['command', 'search', 'mcp', 'question', 'memory'].includes(entry.kind) ? entry.title
+  const short = (entry: ToolActivity) => ['command', 'search', 'mcp', 'question', 'memory', 'issue'].includes(entry.kind) ? entry.title
     : lastParts(entry.title, 2);
   const took = (entry: ToolActivity) => entry.endedAt === undefined ? '' : entry.endedAt - entry.startedAt < 1000
     ? `${entry.endedAt - entry.startedAt} ms` : `${((entry.endedAt - entry.startedAt) / 1000).toFixed(1)} s`;
@@ -58,7 +61,7 @@
             <ChevronRight size={12} class={`shrink-0 ${open[entry.id] ? 'rotate-90' : ''} ${expandable(entry) ? '' : 'opacity-0'}`} aria-hidden="true" />
             <Icon size={13} class="shrink-0 text-muted-foreground" aria-hidden="true" />
             <span class="shrink-0 text-muted-foreground">{verbs[entry.kind] ?? 'Did'}</span>
-            <span class={['min-w-0 flex-1 truncate', !['question', 'memory'].includes(entry.kind) && 'font-mono']}>{short(entry)}</span>
+            <span class={['min-w-0 flex-1 truncate', !['question', 'memory', 'issue'].includes(entry.kind) && 'font-mono']}>{short(entry)}</span>
             {#if entry.agent}<span class="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">{entry.agent}</span>{/if}
             {#if change}<span class="shrink-0 font-mono"><span class="text-success">+{change.added}</span>
               <span class="text-destructive">-{change.removed}</span></span>{/if}
@@ -86,7 +89,7 @@
           {/if}
           {#if open[entry.id]}
             <div class="space-y-2 border-t border-border bg-muted/40 px-3 py-2">
-              {#if !['command', 'search', 'mcp', 'question', 'memory'].includes(entry.kind)}<p class="break-all font-mono text-muted-foreground">{entry.title}</p>{/if}
+              {#if !['command', 'search', 'mcp', 'question', 'memory', 'issue'].includes(entry.kind)}<p class="break-all font-mono text-muted-foreground">{entry.title}</p>{/if}
               {#if entry.detail}<p class="break-all text-muted-foreground">{entry.kind === 'command' ? 'In' : entry.kind === 'mcp' ? 'Sent' : 'Under'} <span class="font-mono">{entry.detail}</span></p>{/if}
               {#if entry.diff}
                 <pre class="diff overflow-x-auto rounded-md border border-border bg-background font-mono leading-5">{#each entry.diff.replace(/\n$/, '').split('\n') as line, index (index)}<span class={lineClass(line)}>{line || ' '}</span>{/each}</pre>

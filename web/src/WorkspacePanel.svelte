@@ -20,12 +20,21 @@
   // The agents this conversation handed tasks to, one card each.
   import AgentCards from './AgentCards.svelte';
   import Users from '@lucide/svelte/icons/users';
+  // A project's issues, and the count waiting for review.
+  import IssuesPanel from './IssuesPanel.svelte';
+  import CircleDot from '@lucide/svelte/icons/circle-dot';
+  // Every issue in its stage, and the live change signal.
+  import BoardPanel from './BoardPanel.svelte';
+  import SquareKanban from '@lucide/svelte/icons/square-kanban';
+  import { watchIssues } from './project-state.svelte';
   import type { Chat } from './chat.svelte';
 
-  type Tab = 'vm' | 'files' | 'changes' | 'terminal' | 'activity' | 'agents';
+  type Tab = 'vm' | 'files' | 'changes' | 'terminal' | 'activity' | 'agents' | 'issues' | 'board';
   let { chat }: { chat: Chat } = $props();
 
   const vm = $derived(chat.machine === 'vm');
+  // Only a project's conversation has issues.
+  const project = $derived(chat.active?.projectId ?? '');
   const tabs = $derived([
     ...(vm ? [{ id: 'vm' as Tab, label: 'VM', icon: MonitorIcon }] : []),
     { id: 'files' as Tab, label: 'Files', icon: FolderTree },
@@ -33,6 +42,7 @@
     { id: 'terminal' as Tab, label: 'Terminal', icon: SquareTerminal },
     { id: 'activity' as Tab, label: 'Activity', icon: ListChecks },
     { id: 'agents' as Tab, label: 'Agents', icon: Users },
+    ...(project ? [{ id: 'issues' as Tab, label: 'Issues', icon: CircleDot }, { id: 'board' as Tab, label: 'Board', icon: SquareKanban }] : []),
   ]);
   // How many delegated agents are working or waiting, shown on the tab.
   const working = $derived(chat.delegations.filter(run => run.status === 'running' || run.status === 'asking').length);
@@ -51,6 +61,28 @@
   let folded = $state<boolean | null>(recall('folded', null));
   let sheet = $state(false);
   let changeCount = $state<number | null>(null);
+  let issueCount = $state(0);
+  // Bumped whenever the project's issues change, so the Issues and Board tabs reload at once.
+  let issuesLive = $state(0);
+  // An issue chosen on the Board, opened in the Issues tab; the sequence remounts it for a repeat choice.
+  let openIssue = $state<number | null>(null);
+  let openSeq = $state(0);
+
+  // Listens live to the project's issues and keeps the review count; an old project's reply is dropped.
+  $effect(() => {
+    const id = project;
+    issueCount = 0;
+    if (!id) return;
+    let live = true;
+    const count = () => chat.projects.issues(id, '', 'review')
+      .then(reply => { if (live) issueCount = reply.issues.length; }, () => {});
+    void count();
+    const stop = watchIssues(id, () => { if (!live) return; issuesLive++; void count(); });
+    return () => { live = false; stop(); };
+  });
+
+  // Opens one issue from the Board in the Issues tab.
+  function openFromBoard(number: number) { openIssue = number; openSeq++; open('issues'); }
 
   const collapsed = $derived(folded ?? !vm);
   // With nothing remembered, a VM conversation shows its screen and any other its changes.
@@ -87,12 +119,12 @@
 </script>
 
 {#snippet body()}
-  <!-- Six tabs do not fit a narrow panel with their words, so below 34rem each shows its icon; the
-       word stays as the tab's name for screen readers and in its tooltip. -->
+  <!-- Six tabs, or eight with a project's Issues and Board, do not fit a narrow panel with their words, so below 34rem
+       (42rem with a project) each shows its icon; the word stays as the tab's name for screen readers and in its tooltip. -->
   <div role="tablist" aria-label="Workspace views" class="@container flex min-w-0 flex-1 gap-0.5">
     {#each tabs as item (item.id)}
       <button role="tab" aria-selected={current === item.id} class="workspace-tab" title={item.label} onclick={() => open(item.id)}>
-        <item.icon size={14} aria-hidden="true" /><span class="sr-only @[34rem]:not-sr-only">{item.label}</span>{#if item.id === 'changes' && changeCount}<span class="workspace-count">{changeCount}</span>{/if}{#if item.id === 'agents' && working}<span class="workspace-count">{working}</span>{/if}
+        <item.icon size={14} aria-hidden="true" /><span class={project ? 'sr-only @[42rem]:not-sr-only' : 'sr-only @[34rem]:not-sr-only'}>{item.label}</span>{#if item.id === 'changes' && changeCount}<span class="workspace-count">{changeCount}</span>{/if}{#if item.id === 'agents' && working}<span class="workspace-count">{working}</span>{/if}{#if item.id === 'issues' && issueCount}<span class="workspace-count">{issueCount}</span>{/if}
       </button>
     {/each}
   </div>
@@ -108,6 +140,11 @@
       {#key chat.active?.id}<ChangesView {chat} oncount={count => { changeCount = count; }} />{/key}
     {:else if current === 'terminal'}
       {#key chat.active?.id}<Terminal {chat} />{/key}
+    {:else if current === 'issues'}
+      {#key `${project}:${openSeq}`}<IssuesPanel {chat} projectId={project} live={issuesLive} open={openIssue} onopened={() => { openIssue = null; }}
+        oncount={count => { issueCount = count; }} />{/key}
+    {:else if current === 'board'}
+      {#key project}<BoardPanel {chat} projectId={project} live={issuesLive} onopen={openFromBoard} />{/key}
     {:else if current === 'agents'}
       <AgentCards {chat} onshow={() => { sheet = false; }} />
     {:else}
@@ -130,7 +167,7 @@
       {#each tabs as item (item.id)}
         <button class="icon-button relative" aria-label={`Open ${item.label}`} title={item.label} onclick={() => open(item.id)}>
           <item.icon size={16} aria-hidden="true" />
-          {#if item.id === 'changes' && changeCount}<span class="workspace-dot" aria-hidden="true"></span>{/if}
+          {#if (item.id === 'changes' && changeCount) || (item.id === 'issues' && issueCount)}<span class="workspace-dot" aria-hidden="true"></span>{/if}
         </button>
       {/each}
     </div>
