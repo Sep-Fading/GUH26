@@ -80,7 +80,8 @@
     catch (failure) { error = (failure as Error).message; }
     finally { linking = new Set([...linking].filter(item => item !== key)); void read(); }
   }
-  const swarmDot = (member: SwarmMember) => !member.linkUp ? 'bg-[#b85400]' : member.issue !== null ? 'bg-sky-500 animate-pulse'
+  const swarmDot = (member: SwarmMember) => !member.linkUp ? 'bg-[#b85400]' : member.retrying ? 'bg-amber-500 animate-pulse'
+    : member.issue !== null ? 'bg-sky-500 animate-pulse'
     : member.status === 'Done' ? 'bg-success' : 'bg-[#c7c7cc]';
   const working = $derived(swarms.reduce((sum, swarm) => sum + swarm.members.filter(member => member.issue !== null).length, 0));
 
@@ -128,7 +129,7 @@
                 <li class="flex items-center gap-2">
                   <span class={['size-2 shrink-0 rounded-full', swarmDot(member)]} aria-hidden="true"></span>
                   <span class="w-16 shrink-0 truncate text-xs font-medium">{member.name}</span>
-                  <span class={['min-w-0 flex-1 truncate text-xs', member.linkUp ? 'text-muted-foreground' : 'text-[#b85400]']} title={member.status}>{member.status}</span>
+                  <span class={['min-w-0 flex-1 truncate text-xs', !member.linkUp ? 'text-[#b85400]' : member.retrying ? 'text-amber-600' : 'text-muted-foreground']} title={member.status}>{member.status}</span>
                   {#if turn && !isStopping(turn)}
                     <button class="icon-button size-6" aria-label={`Stop ${member.name}`} title="Stop" onclick={() => stop([turn])}>
                       <Square size={11} aria-hidden="true" />
