@@ -1,0 +1,9 @@
+The record of the work is in MiniClaw's data folder:
+- Linux: ~/.local/share/miniclaw (or whatever MINICLAW_DATA_DIR points to)
+- macOS: ~/Library/Application Support/MiniClaw
+- Windows: %LOCALAPPDATA%\MiniClaw
+
+What's in it:
+- The Board and issues: the database agents.sqlite3 holds each story's stage, owner, severity and full history, plus the swarm's project and the saved skills.
+- The swarm itself: swarms/<id>.json holds its team, status and event log, and is what lets a swarm resume after a restart.
+- The agents' conversations: the messages are in the Codex or Claude history under ~/.codex or ~/.claude, with MiniClaw's own labels in agents.sqlite3. They appear in the sidebar under each swarm.
