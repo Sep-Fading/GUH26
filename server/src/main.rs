@@ -276,6 +276,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let _ = backend.chat_folders.path.set(data.join("conversation-folders.json"));
         // A run that a stopped backend left open is closed as failed; it is never run again.
         let _ = backend.agents.close_interrupted_runs().await;
+        // Swarms that were working carry on by themselves, once a provider is signed in.
+        tokio::spawn(miniclaw_server::api::resume_swarms(backend.clone()));
         // What this Mac is and which common tools it has, for every conversation's briefing.
         tokio::spawn(miniclaw_server::briefing::detect());
         let _ = backend.agents.close_interrupted_schedules().await;

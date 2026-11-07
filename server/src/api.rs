@@ -45,6 +45,8 @@ mod swarm;
 pub use swarm::actor as swarm_actor;
 /// A swarm Lead's own issue actions, for the issue tool.
 pub use swarm::lead_action as swarm_lead_action;
+/// Resumes the swarms a stopped backend left working.
+pub use swarm::resume_all as resume_swarms;
 mod schedules;
 mod mcp;
 mod queue;

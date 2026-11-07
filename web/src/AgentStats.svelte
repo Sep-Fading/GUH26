@@ -26,7 +26,24 @@
   // Ticks every second so a running agent's time counts up between readings.
   let now = $state(Date.now());
 
+  // Running swarms: each agent's link to the issues can be cut and restored here.
+  type SwarmAgent = { name: string; role: string; linkUp: boolean; status: string; model: string };
+  type RunningSwarm = { id: string; goal: string; members: SwarmAgent[] };
+  let swarms = $state<RunningSwarm[]>([]);
+  let linking = $state(new Set<string>());
+  async function loadSwarms() {
+    try { swarms = (await chat.activeTurns<ActiveTurn>()).swarms ?? []; } catch { /* keep the last reading */ }
+  }
+  async function toggleLink(swarm: RunningSwarm, agent: SwarmAgent) {
+    const key = `${swarm.id}:${agent.name}`;
+    linking = new Set([...linking, key]);
+    try { await chat.swarmLink(swarm.id, agent.name, !agent.linkUp); }
+    catch (cause) { error = cause instanceof Error ? cause.message : 'The link could not be changed.'; }
+    finally { linking = new Set([...linking].filter(item => item !== key)); void loadSwarms(); }
+  }
+
   async function load() {
+    void loadSwarms();
     loading = true;
     try { report = await chat.agentAnalytics<AgentReport>(Number(days)); error = ''; }
     catch (cause) { error = cause instanceof Error ? cause.message : 'The figures could not be read.'; }
@@ -204,6 +221,24 @@
             </p>
           {/if}
         </section>
+
+        {#each swarms as swarm (swarm.id)}
+          <section aria-label={`Swarm agents: ${swarm.goal}`} class="rounded-lg border border-border p-4">
+            <h2 class="mb-2 truncate text-sm font-medium" title={swarm.goal}>Swarm: {swarm.goal}</h2>
+            <ul class="divide-y divide-border">
+              {#each swarm.members.filter(member => member.role !== 'lead') as agent (agent.name)}
+                <li class="flex items-center gap-3 py-2 text-sm">
+                  <span class={['size-2 shrink-0 rounded-full', agent.linkUp ? 'bg-success' : 'bg-[#b85400]']} aria-hidden="true"></span>
+                  <span class="w-20 shrink-0 font-medium">{agent.name}</span>
+                  <span class={['min-w-0 flex-1 truncate text-xs', agent.linkUp ? 'text-muted-foreground' : 'text-[#b85400]']} title={agent.status}>{agent.status}</span>
+                  <button class="shrink-0 rounded-md border border-border px-2.5 py-1 text-xs hover:bg-accent disabled:opacity-50"
+                    disabled={linking.has(`${swarm.id}:${agent.name}`)} aria-label={agent.linkUp ? `Cut ${agent.name}'s link` : `Restore ${agent.name}'s link`}
+                    onclick={() => toggleLink(swarm, agent)}>{agent.linkUp ? 'Cut link' : 'Restore link'}</button>
+                </li>
+              {/each}
+            </ul>
+          </section>
+        {/each}
 
         <!-- Finding an agent among many: filters by what needs attention, with counts, and a name search. -->
         <div class="flex flex-wrap items-center gap-2">

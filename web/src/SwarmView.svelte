@@ -15,8 +15,6 @@
   import BoardPanel from './BoardPanel.svelte';
   import IssuesPanel from './IssuesPanel.svelte';
   import { watchIssues, type ReviewLevel } from './project-state.svelte';
-  // The agents at work, with the kill switch and each swarm agent's link.
-  import RunningAgents from './RunningAgents.svelte';
   // Icons in MiniClaw's set.
   import Users from '@lucide/svelte/icons/users';
   import ArrowUp from '@lucide/svelte/icons/arrow-up';
@@ -221,7 +219,6 @@
   </header>
 
   <div class="relative flex min-h-0 flex-1 flex-col">
-    {#if !swarm}<RunningAgents {chat} onopen={onagents} />{/if}
     {#if !swarm}
       <div class="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
         <div class="max-w-md text-center">
@@ -244,7 +241,6 @@
         </span>
         <Choice label="What agents may close without you" value={level} placeholder="Review level" options={LEVELS} onchange={saveLevel} />
       </div>
-      <div class="flex min-h-0 flex-1">
       <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
         {#if !swarm.projectId}
           <p class="p-6 text-sm text-muted-foreground">This swarm was started before swarms kept their work as issues.</p>
@@ -256,8 +252,7 @@
             onopened={() => { openIssue = null; }} />{/key}
         {/if}
       </div>
-      <RunningAgents {chat} onopen={onagents} docked />
-      </div>
+
     {/if}
   </div>
 

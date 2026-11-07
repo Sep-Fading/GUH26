@@ -408,6 +408,12 @@ async fn run(backend: Shared, swarm: Arc<Swarm>, lead_model: String, team: Vec<(
         if let Some(lead) = state.member("Lead") { lead.status = "Ready to talk".into(); }
         state.event("info", format!("The Lead filed {filed} stories in the Backlog."));
     });
+    supervise(backend, swarm, team).await;
+}
+
+/// Starts the agents and watches the swarm until it is stopped: releases leases that ran out, saves
+/// its record, and moves it between running and idle as stories close and arrive.
+async fn supervise(backend: Shared, swarm: Arc<Swarm>, team: Vec<(String, Role, String)>) {
     for (name, role, model) in team {
         tokio::spawn(worker(backend.clone(), swarm.clone(), name, role, model));
     }
@@ -624,16 +630,76 @@ fn save(snapshot: &Value) {
 /// Reads the swarms saved by earlier backend runs. One that was still running is shown as
 /// interrupted: its agents ended with the backend; its issues stay where they were.
 fn saved() -> Vec<Value> {
+    saved_records().into_iter().map(|mut snapshot| {
+        if matches!(snapshot["status"].as_str(), Some("planning" | "running" | "idle")) { snapshot["status"] = json!("interrupted"); }
+        snapshot
+    }).collect()
+}
+
+/// The saved records exactly as written, newest first.
+fn saved_records() -> Vec<Value> {
     let Ok(entries) = std::fs::read_dir(saved_folder()) else { return Vec::new() };
     let mut all: Vec<Value> = entries.flatten().filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
         .filter_map(|entry| serde_json::from_slice::<Value>(&std::fs::read(entry.path()).ok()?).ok())
         .filter(|snapshot| snapshot["id"].as_str().is_some_and(|id| id.chars().all(|c| c.is_ascii_hexdigit())))
-        .map(|mut snapshot| {
-            if matches!(snapshot["status"].as_str(), Some("planning" | "running" | "idle")) { snapshot["status"] = json!("interrupted"); }
-            snapshot
-        }).collect();
+        .collect();
     all.sort_by_key(|snapshot| std::cmp::Reverse(snapshot["created"].as_i64().unwrap_or(0)));
     all
+}
+
+/// Maps a saved event's kind back to the fixed words the history uses.
+fn kind_of(text: &str) -> &'static str {
+    match text { "ok" => "ok", "warn" => "warn", "fail" => "fail", "done" => "done", _ => "info" }
+}
+
+/// Brings back every swarm that was working when the backend stopped. It waits for a signed-in
+/// provider, then for each saved swarm that was planning, running or idle: rebuilds its agents from
+/// the record, gives back to the Backlog every story an agent of that swarm held (the agent that
+/// held it is gone), and starts the agents again. Stories, conversations and files are as they were.
+pub async fn resume_all(backend: Shared) {
+    for _ in 0..120 {
+        if authorized(&backend).await.is_ok() { break; }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+    for record in saved_records() {
+        if !matches!(record["status"].as_str(), Some("planning" | "running" | "idle")) { continue; }
+        let Some(id) = record["id"].as_str().map(str::to_owned) else { continue };
+        if find(&id).is_some() { continue; }
+        let Some(project) = record["projectId"].as_str().and_then(|text| Uuid::parse_str(text).ok()) else { continue };
+        if !backend.agents.projects().await.is_ok_and(|all| all.iter().any(|item| item.id == project)) { continue; }
+        let time = now();
+        let members: Vec<Member> = record["members"].as_array().into_iter().flatten().filter_map(|member| Some(Member {
+            name: member["name"].as_str()?.to_owned(), role: serde_json::from_value(member["role"].clone()).ok()?,
+            model: member["model"].as_str()?.to_owned(), link_up: true, last_seen: time, status: "Resuming".into(), issue: None,
+            thread: member["thread"].as_str().map(str::to_owned), queued: Vec::new(), done: member["done"].as_u64().unwrap_or(0) as u32,
+            joined: time, unreachable_ms: 0 })).collect();
+        let Some(lead) = members.iter().find(|member| member.role == Role::Lead).cloned() else { continue };
+        let team: Vec<(String, Role, String)> = members.iter().filter(|member| member.role != Role::Lead)
+            .map(|member| (member.name.clone(), member.role, member.model.clone())).collect();
+        let mut events: Vec<Event> = record["events"].as_array().into_iter().flatten().filter_map(|event| Some(Event {
+            at: event["at"].as_i64()?, kind: kind_of(event["kind"].as_str()?), text: event["text"].as_str()?.to_owned() })).collect();
+        events.push(Event { at: time, kind: "warn", text: "The backend restarted. MiniClaw is resuming the swarm: stories held by agents go back to the Backlog.".into() });
+        let swarm = Arc::new(Swarm { id: id.clone(), goal: record["goal"].as_str().unwrap_or_default().to_owned(),
+            workspace: record["workspace"].as_str().unwrap_or_default().to_owned(), unsandboxed: record["unsandboxed"] == true, project,
+            skills: role_skills(&backend).await, created: record["created"].as_i64().unwrap_or(time), stopped: AtomicBool::new(false),
+            state: StdMutex::new(Ledger { status: "running", members, events, leases: Default::default(), rounds: Default::default(),
+                attempts: Default::default(), next_version: 0, finished: None }) });
+        // Stories an agent of this swarm held go back: a developer's to the Backlog, the others stay in their stage unowned.
+        let prefix = format!("swarm-{}-", &id[..6]);
+        let held: Vec<Record> = backend.agents.issues(project, None, None).await.unwrap_or_default().into_iter()
+            .filter(|issue| crate::issues::active(&issue.status) && issue.status != "backlog" && issue.owner_id.as_deref().is_some_and(|owner| owner.starts_with(&prefix))).collect();
+        for issue in held {
+            let (Some(owner_id), Some(owner)) = (issue.owner_id.clone(), issue.owner.clone()) else { continue };
+            let handover = format!("The backend restarted while {owner} worked on this. MiniClaw released it for another agent.");
+            let _ = backend.agents.release_issue(project, issue.number, Actor { id: owner_id, name: owner }, handover).await;
+        }
+        if backend.agents.issues(project, None, None).await.map_or(true, |issues| issues.is_empty()) {
+            for draft in read_plan("", &swarm.goal) { let _ = backend.agents.create_issue(project, draft, "Lead".into()).await; }
+        }
+        if let Some(thread) = lead.thread { threads().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(thread, (swarm.clone(), "Lead".into())); }
+        swarms().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(swarm.clone());
+        tokio::spawn(supervise(backend.clone(), swarm, team));
+    }
 }
 
 /// The Anthropic skills each role gets (server/swarm-skills, Apache 2.0; see its NOTICE.md).
